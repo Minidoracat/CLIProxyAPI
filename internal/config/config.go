@@ -65,6 +65,9 @@ type Config struct {
 	// UsageStatisticsEnabled toggles in-memory usage aggregation; when false, usage data is discarded.
 	UsageStatisticsEnabled bool `yaml:"usage-statistics-enabled" json:"usage-statistics-enabled"`
 
+	// UsageStatisticsPersistence configures PostgreSQL-backed persistence for usage statistics.
+	UsageStatisticsPersistence UsagePersistenceConfig `yaml:"usage-statistics-persistence" json:"usage-statistics-persistence"`
+
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
@@ -184,6 +187,18 @@ type PprofConfig struct {
 	Enable bool `yaml:"enable" json:"enable"`
 	// Addr is the host:port address for the pprof HTTP server.
 	Addr string `yaml:"addr" json:"addr"`
+}
+
+// UsagePersistenceConfig controls PostgreSQL-backed usage statistics persistence.
+type UsagePersistenceConfig struct {
+	Enabled                      bool   `yaml:"enabled" json:"enabled"`
+	PostgresDSN                  string `yaml:"postgres-dsn" json:"-"`
+	Schema                       string `yaml:"schema,omitempty" json:"schema,omitempty"`
+	RecentDetailsPerModel        int    `yaml:"recent-details-per-model" json:"recent-details-per-model"`
+	RetentionDays                int    `yaml:"retention-days" json:"retention-days"`
+	BatchSize                    int    `yaml:"batch-size" json:"batch-size"`
+	SnapshotFlushIntervalSeconds int    `yaml:"snapshot-flush-interval-seconds" json:"snapshot-flush-interval-seconds"`
+	BootstrapOnStart             bool   `yaml:"bootstrap-on-start" json:"bootstrap-on-start"`
 }
 
 // RemoteManagement holds management API configuration under 'remote-management'.
@@ -583,6 +598,11 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.LogsMaxTotalSizeMB = 0
 	cfg.ErrorLogsMaxFiles = 10
 	cfg.UsageStatisticsEnabled = false
+	cfg.UsageStatisticsPersistence.RecentDetailsPerModel = 200
+	cfg.UsageStatisticsPersistence.RetentionDays = 30
+	cfg.UsageStatisticsPersistence.BatchSize = 100
+	cfg.UsageStatisticsPersistence.SnapshotFlushIntervalSeconds = 15
+	cfg.UsageStatisticsPersistence.BootstrapOnStart = true
 	cfg.DisableCooling = false
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr

@@ -15,7 +15,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/api"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor"
-	_ "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
+	internalusage "github.com/router-for-me/CLIProxyAPI/v6/internal/usage"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/watcher"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/wsrelay"
 	sdkaccess "github.com/router-for-me/CLIProxyAPI/v6/sdk/access"
@@ -89,6 +89,9 @@ type Service struct {
 
 	// wsGateway manages websocket Gemini providers.
 	wsGateway *wsrelay.Manager
+
+	// usagePersistence is the optional PostgreSQL persistence plugin for usage statistics.
+	usagePersistence *internalusage.PersistencePlugin
 }
 
 // RegisterUsagePlugin registers a usage plugin on the global usage manager.
@@ -482,6 +485,13 @@ func (s *Service) Run(ctx context.Context) error {
 
 	usage.StartDefault(ctx)
 
+	// Initialize usage persistence if configured.
+	if s.cfg.UsageStatisticsEnabled && s.cfg.UsageStatisticsPersistence.Enabled {
+		if err := s.initUsagePersistence(ctx); err != nil {
+			log.Warnf("usage persistence unavailable, continuing with in-memory only: %v", err)
+		}
+	}
+
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer shutdownCancel()
 	defer func() {
@@ -763,9 +773,54 @@ func (s *Service) Shutdown(ctx context.Context) error {
 			}
 		}
 
+		// Flush and close usage persistence before stopping the dispatcher.
+		// Must happen BEFORE usage.StopDefault() so the dispatcher is still
+		// running to drain any final records.
+		if s.usagePersistence != nil {
+			s.usagePersistence.Stop()
+		}
+
 		usage.StopDefault()
 	})
 	return shutdownErr
+}
+
+// initUsagePersistence connects to PostgreSQL, ensures the schema exists,
+// optionally bootstraps in-memory stats from the last snapshot, and starts
+// the background persistence plugin.
+func (s *Service) initUsagePersistence(ctx context.Context) error {
+	cfg := s.cfg.UsageStatisticsPersistence
+	store, err := internalusage.NewPGStore(ctx, cfg.PostgresDSN, cfg.Schema)
+	if err != nil {
+		return fmt.Errorf("connect to usage database: %w", err)
+	}
+	if err := store.EnsureSchema(ctx); err != nil {
+		_ = store.Close()
+		return fmt.Errorf("ensure usage schema: %w", err)
+	}
+
+	stats := internalusage.GetRequestStatistics()
+
+	if cfg.BootstrapOnStart {
+		if err := internalusage.BootstrapFromPG(store, stats); err != nil {
+			log.Warnf("usage persistence: bootstrap failed, starting fresh: %v", err)
+		}
+	}
+
+	plugin := internalusage.NewPersistencePlugin(internalusage.PersistencePluginConfig{
+		Store:                store,
+		Stats:                stats,
+		BatchSize:            cfg.BatchSize,
+		FlushIntervalSeconds: cfg.SnapshotFlushIntervalSeconds,
+		RetentionDays:        cfg.RetentionDays,
+	})
+	plugin.Start(ctx)
+
+	usage.RegisterPlugin(plugin)
+
+	s.usagePersistence = plugin
+	log.Info("usage persistence: PostgreSQL backend initialized")
+	return nil
 }
 
 func (s *Service) ensureAuthDir() error {

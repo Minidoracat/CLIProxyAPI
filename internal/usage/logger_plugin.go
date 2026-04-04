@@ -15,6 +15,9 @@ import (
 	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
 )
 
+// DefaultMaxDetailsPerModel is the maximum number of RequestDetail entries
+// retained per stats_key+model combination in memory.
+const DefaultMaxDetailsPerModel = 200
 var statisticsEnabled atomic.Bool
 
 func init() {
@@ -223,6 +226,12 @@ func (s *RequestStatistics) updateAPIStats(stats *apiStats, model string, detail
 	modelStatsValue.TotalRequests++
 	modelStatsValue.TotalTokens += detail.Tokens.TotalTokens
 	modelStatsValue.Details = append(modelStatsValue.Details, detail)
+	// Evict oldest entries when cap is exceeded
+	if len(modelStatsValue.Details) > DefaultMaxDetailsPerModel {
+		excess := len(modelStatsValue.Details) - DefaultMaxDetailsPerModel
+		copy(modelStatsValue.Details, modelStatsValue.Details[excess:])
+		modelStatsValue.Details = modelStatsValue.Details[:DefaultMaxDetailsPerModel]
+	}
 }
 
 // Snapshot returns a copy of the aggregated metrics for external consumption.
@@ -353,6 +362,94 @@ func (s *RequestStatistics) MergeSnapshot(snapshot StatisticsSnapshot) MergeResu
 	}
 
 	return result
+}
+
+// ReplaceFromSnapshot overwrites all in-memory statistics with the given snapshot.
+// Unlike MergeSnapshot (which imports individual detail rows and recounts),
+// this method restores the exact aggregated totals, time-bucket maps, and
+// API→Model→Details hierarchy from the snapshot. Pre-existing data is discarded.
+//
+// This is used for bootstrap restore from PostgreSQL where the snapshot already
+// contains correct aggregate values that should NOT be recounted from details.
+func (s *RequestStatistics) ReplaceFromSnapshot(snapshot StatisticsSnapshot) {
+	if s == nil {
+		return
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Reset all state
+	s.totalRequests = snapshot.TotalRequests
+	s.successCount = snapshot.SuccessCount
+	s.failureCount = snapshot.FailureCount
+	s.totalTokens = snapshot.TotalTokens
+
+	// Rebuild APIs hierarchy
+	s.apis = make(map[string]*apiStats, len(snapshot.APIs))
+	for apiName, apiSnap := range snapshot.APIs {
+		stats := &apiStats{
+			TotalRequests: apiSnap.TotalRequests,
+			TotalTokens:   apiSnap.TotalTokens,
+			Models:        make(map[string]*modelStats, len(apiSnap.Models)),
+		}
+		for modelName, modelSnap := range apiSnap.Models {
+			details := make([]RequestDetail, len(modelSnap.Details))
+			copy(details, modelSnap.Details)
+			stats.Models[modelName] = &modelStats{
+				TotalRequests: modelSnap.TotalRequests,
+				TotalTokens:   modelSnap.TotalTokens,
+				Details:       details,
+			}
+		}
+		s.apis[apiName] = stats
+	}
+
+	// Restore day buckets (string keys, direct copy)
+	s.requestsByDay = make(map[string]int64, len(snapshot.RequestsByDay))
+	for k, v := range snapshot.RequestsByDay {
+		s.requestsByDay[k] = v
+	}
+	s.tokensByDay = make(map[string]int64, len(snapshot.TokensByDay))
+	for k, v := range snapshot.TokensByDay {
+		s.tokensByDay[k] = v
+	}
+
+	// Restore hour buckets: snapshot uses map[string]int64 ("00"-"23"),
+	// internal uses map[int]int64 — must parse string keys back to ints.
+	s.requestsByHour = make(map[int]int64, len(snapshot.RequestsByHour))
+	for k, v := range snapshot.RequestsByHour {
+		hour := parseHourKey(k)
+		if hour >= 0 {
+			s.requestsByHour[hour] = v
+		}
+	}
+	s.tokensByHour = make(map[int]int64, len(snapshot.TokensByHour))
+	for k, v := range snapshot.TokensByHour {
+		hour := parseHourKey(k)
+		if hour >= 0 {
+			s.tokensByHour[hour] = v
+		}
+	}
+}
+
+// parseHourKey converts a string hour key ("00"-"23") to an int (0-23).
+// Returns -1 for invalid input.
+func parseHourKey(key string) int {
+	if len(key) == 0 {
+		return -1
+	}
+	hour := 0
+	for _, c := range key {
+		if c < '0' || c > '9' {
+			return -1
+		}
+		hour = hour*10 + int(c-'0')
+	}
+	if hour < 0 || hour > 23 {
+		return -1
+	}
+	return hour
 }
 
 func (s *RequestStatistics) recordImported(apiName, modelName string, stats *apiStats, detail RequestDetail) {

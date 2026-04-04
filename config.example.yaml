@@ -65,6 +65,17 @@ error-logs-max-files: 10
 
 # When false, disable in-memory usage statistics aggregation
 usage-statistics-enabled: false
+# PostgreSQL persistence for usage statistics (fork-only feature).
+# Requires usage-statistics-enabled: true to have any effect.
+# usage-statistics-persistence:
+#   enabled: false
+#   postgres-dsn: "postgres://user:pass@127.0.0.1:5432/cliproxy?sslmode=disable"
+#   schema: ""
+#   recent-details-per-model: 200
+#   retention-days: 30
+#   batch-size: 100
+#   snapshot-flush-interval-seconds: 15
+#   bootstrap-on-start: true
 
 # Proxy URL. Supports socks5/http/https protocols. Example: socks5://user:pass@192.168.1.1:1080/
 # Per-entry proxy-url also supports "direct" or "none" to bypass both the global proxy-url and environment proxies explicitly.
