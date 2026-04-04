@@ -98,6 +98,7 @@ type RequestDetail struct {
 	AuthIndex string     `json:"auth_index"`
 	Tokens    TokenStats `json:"tokens"`
 	Failed    bool       `json:"failed"`
+	Cost      float64    `json:"cost"`
 }
 
 // TokenStats captures the token usage breakdown for a request.
@@ -111,10 +112,11 @@ type TokenStats struct {
 
 // StatisticsSnapshot represents an immutable view of the aggregated metrics.
 type StatisticsSnapshot struct {
-	TotalRequests int64 `json:"total_requests"`
-	SuccessCount  int64 `json:"success_count"`
-	FailureCount  int64 `json:"failure_count"`
-	TotalTokens   int64 `json:"total_tokens"`
+	TotalRequests int64   `json:"total_requests"`
+	SuccessCount  int64   `json:"success_count"`
+	FailureCount  int64   `json:"failure_count"`
+	TotalTokens   int64   `json:"total_tokens"`
+	TotalCost     float64 `json:"total_cost"`
 
 	APIs map[string]APISnapshot `json:"apis"`
 
@@ -128,6 +130,7 @@ type StatisticsSnapshot struct {
 type APISnapshot struct {
 	TotalRequests int64                    `json:"total_requests"`
 	TotalTokens   int64                    `json:"total_tokens"`
+	TotalCost     float64                  `json:"total_cost"`
 	Models        map[string]ModelSnapshot `json:"models"`
 }
 
@@ -135,6 +138,7 @@ type APISnapshot struct {
 type ModelSnapshot struct {
 	TotalRequests int64           `json:"total_requests"`
 	TotalTokens   int64           `json:"total_tokens"`
+	TotalCost     float64         `json:"total_cost"`
 	Details       []RequestDetail `json:"details"`
 }
 

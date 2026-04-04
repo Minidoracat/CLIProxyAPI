@@ -126,6 +126,9 @@ type Config struct {
 	// gemini-api-key, codex-api-key, claude-api-key, openai-compatibility, vertex-api-key, and ampcode.
 	OAuthModelAlias map[string][]OAuthModelAlias `yaml:"oauth-model-alias,omitempty" json:"oauth-model-alias,omitempty"`
 
+	// ModelPrices defines per-model token pricing ($/1M tokens) managed via the management panel.
+	ModelPrices map[string]ModelPrice `yaml:"model-prices,omitempty" json:"model-prices,omitempty"`
+
 	// Payload defines default and override rules for provider payload parameters.
 	Payload PayloadConfig `yaml:"payload" json:"payload"`
 
@@ -246,6 +249,13 @@ type OAuthModelAlias struct {
 	Name  string `yaml:"name" json:"name"`
 	Alias string `yaml:"alias" json:"alias"`
 	Fork  bool   `yaml:"fork,omitempty" json:"fork,omitempty"`
+}
+
+// ModelPrice defines per-model token pricing in dollars per million tokens.
+type ModelPrice struct {
+	Prompt     float64 `yaml:"prompt" json:"prompt"`
+	Completion float64 `yaml:"completion" json:"completion"`
+	Cache      float64 `yaml:"cache" json:"cache"`
 }
 
 // AmpModelMapping defines a model name mapping for Amp CLI requests.
@@ -704,6 +714,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	// Normalize global OAuth model name aliases.
 	cfg.SanitizeOAuthModelAlias()
 
+	// Normalize model price entries.
+	cfg.SanitizeModelPrices()
+
 	// Validate raw payload rules and drop invalid entries.
 	cfg.SanitizePayloadRules()
 
@@ -841,6 +854,36 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 		}
 	}
 	cfg.OAuthModelAlias = out
+}
+
+// SanitizeModelPrices normalizes model price entries.
+// It trims model name whitespace, clamps negative values to zero,
+// and removes entries where all price fields are zero.
+func (cfg *Config) SanitizeModelPrices() {
+	if cfg == nil || len(cfg.ModelPrices) == 0 {
+		return
+	}
+	out := make(map[string]ModelPrice, len(cfg.ModelPrices))
+	for rawModel, price := range cfg.ModelPrices {
+		model := strings.TrimSpace(rawModel)
+		if model == "" {
+			continue
+		}
+		if price.Prompt < 0 {
+			price.Prompt = 0
+		}
+		if price.Completion < 0 {
+			price.Completion = 0
+		}
+		if price.Cache < 0 {
+			price.Cache = 0
+		}
+		if price.Prompt == 0 && price.Completion == 0 && price.Cache == 0 {
+			continue
+		}
+		out[model] = price
+	}
+	cfg.ModelPrices = out
 }
 
 // SanitizeOpenAICompatibility removes OpenAI-compatibility provider entries that are
@@ -1069,6 +1112,7 @@ func SaveConfigPreserveComments(configFile string, cfg *Config) error {
 
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-excluded-models")
 	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "oauth-model-alias")
+	pruneMappingToGeneratedKeys(original.Content[0], generated.Content[0], "model-prices")
 
 	// Merge generated into original in-place, preserving comments/order of existing nodes.
 	mergeMappingPreserve(original.Content[0], generated.Content[0])

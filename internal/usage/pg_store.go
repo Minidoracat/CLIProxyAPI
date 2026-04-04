@@ -9,6 +9,7 @@ import (
 	"time"
 
 	_ "github.com/jackc/pgx/v5/stdlib"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -240,6 +241,126 @@ func (s *PGStore) LastDetailID(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("usage pg store: last detail id: %w", err)
 	}
 	return id, nil
+}
+
+// --- Model Prices ---
+
+const defaultModelPricesTable = "model_prices"
+
+// EnsureModelPricesSchema creates the model_prices table if it does not exist.
+func (s *PGStore) EnsureModelPricesSchema(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("usage pg store: not initialized")
+	}
+	tableName := pgFullTableName(s.schema, defaultModelPricesTable)
+	if _, err := s.db.ExecContext(ctx, fmt.Sprintf(`
+		CREATE TABLE IF NOT EXISTS %s (
+			model       TEXT PRIMARY KEY,
+			prompt      DOUBLE PRECISION NOT NULL DEFAULT 0,
+			completion  DOUBLE PRECISION NOT NULL DEFAULT 0,
+			cache       DOUBLE PRECISION NOT NULL DEFAULT 0,
+			updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+		)
+	`, tableName)); err != nil {
+		return fmt.Errorf("usage pg store: create model_prices table: %w", err)
+	}
+	return nil
+}
+
+// LoadModelPrices returns all model prices from PostgreSQL.
+func (s *PGStore) LoadModelPrices(ctx context.Context) (map[string]config.ModelPrice, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("usage pg store: not initialized")
+	}
+	tableName := pgFullTableName(s.schema, defaultModelPricesTable)
+	rows, err := s.db.QueryContext(ctx, fmt.Sprintf(
+		`SELECT model, prompt, completion, cache FROM %s`, tableName,
+	))
+	if err != nil {
+		return nil, fmt.Errorf("usage pg store: load model prices: %w", err)
+	}
+	defer rows.Close()
+
+	prices := make(map[string]config.ModelPrice)
+	for rows.Next() {
+		var model string
+		var p config.ModelPrice
+		if err := rows.Scan(&model, &p.Prompt, &p.Completion, &p.Cache); err != nil {
+			return nil, fmt.Errorf("usage pg store: scan model price row: %w", err)
+		}
+		prices[model] = p
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("usage pg store: iterate model price rows: %w", err)
+	}
+	return prices, nil
+}
+
+// SaveModelPrices replaces all model prices in PostgreSQL using a single transaction
+// with an exclusive table lock to prevent concurrent modifications.
+func (s *PGStore) SaveModelPrices(ctx context.Context, prices map[string]config.ModelPrice) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("usage pg store: not initialized")
+	}
+	tableName := pgFullTableName(s.schema, defaultModelPricesTable)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("usage pg store: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(
+		`LOCK TABLE %s IN EXCLUSIVE MODE`, tableName,
+	)); err != nil {
+		return fmt.Errorf("usage pg store: lock model_prices: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(
+		`DELETE FROM %s`, tableName,
+	)); err != nil {
+		return fmt.Errorf("usage pg store: delete model_prices: %w", err)
+	}
+
+	if len(prices) > 0 {
+		const cols = 4
+		var b strings.Builder
+		b.WriteString(fmt.Sprintf(
+			`INSERT INTO %s (model, prompt, completion, cache) VALUES `, tableName,
+		))
+		args := make([]any, 0, len(prices)*cols)
+		i := 0
+		for model, p := range prices {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			base := i * cols
+			fmt.Fprintf(&b, "($%d,$%d,$%d,$%d)", base+1, base+2, base+3, base+4)
+			args = append(args, model, p.Prompt, p.Completion, p.Cache)
+			i++
+		}
+		if _, err := tx.ExecContext(ctx, b.String(), args...); err != nil {
+			return fmt.Errorf("usage pg store: insert model_prices: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("usage pg store: commit model_prices: %w", err)
+	}
+	return nil
+}
+
+// DeleteModelPrice removes a single model price entry from PostgreSQL.
+func (s *PGStore) DeleteModelPrice(ctx context.Context, model string) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("usage pg store: not initialized")
+	}
+	tableName := pgFullTableName(s.schema, defaultModelPricesTable)
+	_, err := s.db.ExecContext(ctx, fmt.Sprintf(
+		`DELETE FROM %s WHERE model = $1`, tableName,
+	), model)
+	if err != nil {
+		return fmt.Errorf("usage pg store: delete model price: %w", err)
+	}
+	return nil
 }
 
 // Close releases the database connection.

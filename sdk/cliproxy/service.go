@@ -823,6 +823,15 @@ func (s *Service) initUsagePersistence(ctx context.Context) error {
 
 	s.usagePersistence = plugin
 	log.Info("usage persistence: PostgreSQL backend initialized")
+
+	// Initialize model prices table and inject store into management handler.
+	if err := store.EnsureModelPricesSchema(ctx); err != nil {
+		log.Warnf("usage persistence: model_prices schema creation failed: %v", err)
+	} else if s.server != nil {
+		s.server.SetModelPriceStore(store)
+		log.Info("usage persistence: model price store injected into management handler")
+	}
+
 	return nil
 }
 

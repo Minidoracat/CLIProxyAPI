@@ -48,6 +48,7 @@ type Handler struct {
 	envSecret           string
 	logDir              string
 	postAuthHook        coreauth.PostAuthHook
+	modelPriceStore     *usage.PGStore // nil when PG is unavailable
 }
 
 // NewHandler creates a new management handler instance.
@@ -132,6 +133,12 @@ func (h *Handler) SetLogDirectory(dir string) {
 // SetPostAuthHook registers a hook to be called after auth record creation but before persistence.
 func (h *Handler) SetPostAuthHook(hook coreauth.PostAuthHook) {
 	h.postAuthHook = hook
+}
+
+// SetModelPriceStore injects the PostgreSQL store used for model price persistence.
+// When non-nil, model price handlers use PG as the source of truth with config.yaml as fallback.
+func (h *Handler) SetModelPriceStore(store *usage.PGStore) {
+	h.modelPriceStore = store
 }
 
 // Middleware enforces access control for management endpoints.

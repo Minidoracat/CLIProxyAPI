@@ -624,6 +624,11 @@ func (s *Server) registerManagementRoutes() {
 		mgmt.PATCH("/oauth-model-alias", s.mgmt.PatchOAuthModelAlias)
 		mgmt.DELETE("/oauth-model-alias", s.mgmt.DeleteOAuthModelAlias)
 
+		mgmt.GET("/model-prices", s.mgmt.GetModelPrices)
+		mgmt.PUT("/model-prices", s.mgmt.PutModelPrices)
+		mgmt.PATCH("/model-prices", s.mgmt.PatchModelPrices)
+		mgmt.DELETE("/model-prices", s.mgmt.DeleteModelPrices)
+
 		mgmt.GET("/auth-files", s.mgmt.ListAuthFiles)
 		mgmt.GET("/auth-files/models", s.mgmt.GetAuthFileModels)
 		mgmt.GET("/model-definitions/:channel", s.mgmt.GetStaticModelDefinitions)
@@ -1015,6 +1020,14 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		vertexAICompatCount,
 		openAICompatCount,
 	)
+}
+
+// SetModelPriceStore injects the PG store into the management handler for model price persistence.
+func (s *Server) SetModelPriceStore(store *usage.PGStore) {
+	if s == nil || s.mgmt == nil {
+		return
+	}
+	s.mgmt.SetModelPriceStore(store)
 }
 
 func (s *Server) SetWebsocketAuthChangeHandler(fn func(bool, bool)) {

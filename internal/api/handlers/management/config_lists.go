@@ -1,12 +1,14 @@
 package management
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 
 	"github.com/gin-gonic/gin"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
+	log "github.com/sirupsen/logrus"
 )
 
 // Generic helpers for list[string]
@@ -1070,6 +1072,137 @@ func sanitizedOAuthModelAlias(entries map[string][]config.OAuthModelAlias) map[s
 		return nil
 	}
 	return cfg.OAuthModelAlias
+}
+
+// model-prices: map[string]ModelPrice
+
+func (h *Handler) GetModelPrices(c *gin.Context) {
+	if h.modelPriceStore != nil {
+		prices, err := h.modelPriceStore.LoadModelPrices(context.Background())
+		if err == nil {
+			if prices == nil {
+				prices = map[string]config.ModelPrice{}
+			}
+			c.JSON(200, gin.H{"model-prices": prices})
+			return
+		}
+		log.Warnf("model-prices: PG load failed, falling back to config: %v", err)
+	}
+	prices := h.cfg.ModelPrices
+	if prices == nil {
+		prices = map[string]config.ModelPrice{}
+	}
+	c.JSON(200, gin.H{"model-prices": prices})
+}
+
+func (h *Handler) PutModelPrices(c *gin.Context) {
+	data, err := c.GetRawData()
+	if err != nil {
+		c.JSON(400, gin.H{"error": "failed to read body"})
+		return
+	}
+	var entries map[string]config.ModelPrice
+	if err = json.Unmarshal(data, &entries); err != nil {
+		var wrapper struct {
+			Items map[string]config.ModelPrice `json:"items"`
+		}
+		if err2 := json.Unmarshal(data, &wrapper); err2 != nil {
+			c.JSON(400, gin.H{"error": "invalid body"})
+			return
+		}
+		entries = wrapper.Items
+	}
+	cfg := config.Config{ModelPrices: entries}
+	cfg.SanitizeModelPrices()
+
+	if h.modelPriceStore != nil {
+		if err := h.modelPriceStore.SaveModelPrices(context.Background(), cfg.ModelPrices); err != nil {
+			log.Warnf("model-prices: PG save failed: %v", err)
+		}
+	}
+
+	h.cfg.ModelPrices = cfg.ModelPrices
+	h.persist(c)
+}
+
+func (h *Handler) PatchModelPrices(c *gin.Context) {
+	var body struct {
+		Model      string  `json:"model"`
+		Prompt     float64 `json:"prompt"`
+		Completion float64 `json:"completion"`
+		Cache      float64 `json:"cache"`
+	}
+	if err := c.ShouldBindJSON(&body); err != nil {
+		c.JSON(400, gin.H{"error": "invalid body"})
+		return
+	}
+	model := strings.TrimSpace(body.Model)
+	if model == "" {
+		c.JSON(400, gin.H{"error": "missing model"})
+		return
+	}
+
+	// Load current prices from PG if available, otherwise from config.
+	var current map[string]config.ModelPrice
+	if h.modelPriceStore != nil {
+		loaded, err := h.modelPriceStore.LoadModelPrices(context.Background())
+		if err == nil {
+			current = loaded
+		} else {
+			log.Warnf("model-prices: PG load for patch failed, using config: %v", err)
+		}
+	}
+	if current == nil {
+		current = h.cfg.ModelPrices
+	}
+	if current == nil {
+		current = make(map[string]config.ModelPrice)
+	}
+
+	current[model] = config.ModelPrice{
+		Prompt:     body.Prompt,
+		Completion: body.Completion,
+		Cache:      body.Cache,
+	}
+	cfg := config.Config{ModelPrices: current}
+	cfg.SanitizeModelPrices()
+
+	if h.modelPriceStore != nil {
+		if err := h.modelPriceStore.SaveModelPrices(context.Background(), cfg.ModelPrices); err != nil {
+			log.Warnf("model-prices: PG save failed: %v", err)
+		}
+	}
+
+	h.cfg.ModelPrices = cfg.ModelPrices
+	h.persist(c)
+}
+
+func (h *Handler) DeleteModelPrices(c *gin.Context) {
+	model := strings.TrimSpace(c.Query("model"))
+	if model == "" {
+		c.JSON(400, gin.H{"error": "missing model"})
+		return
+	}
+	if h.cfg.ModelPrices == nil {
+		c.JSON(404, gin.H{"error": "model not found"})
+		return
+	}
+	if _, ok := h.cfg.ModelPrices[model]; !ok {
+		c.JSON(404, gin.H{"error": "model not found"})
+		return
+	}
+
+	if h.modelPriceStore != nil {
+		if err := h.modelPriceStore.DeleteModelPrice(context.Background(), model); err != nil {
+			log.Warnf("model-prices: PG delete failed: %v", err)
+		}
+	}
+
+	delete(h.cfg.ModelPrices, model)
+	if len(h.cfg.ModelPrices) == 0 {
+		h.cfg.ModelPrices = nil
+	}
+	h.persist(c)
 }
 
 // GetAmpCode returns the complete ampcode configuration.
