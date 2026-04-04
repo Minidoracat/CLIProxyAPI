@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"git merge upstream/main\",\"description\":\"Merge upstream/main into local main\"}",
+  "error": "Exit code 1\nAuto-merging .gitignore\nAuto-merging config.example.yaml\nAuto-merging internal/api/handlers/management/auth_files.go\nCONFLICT (content): Merge conflict in internal/api/handlers/management/auth_files.go\nAuto-merging internal/config/config.go\nAuto-merging internal/runtime/executor/claude_executor.go\nCONFLICT (content): Merge conflict in internal/runtime/executor/claude_executor.go\nAuto-merging internal/runtime/executor/claude_executor_test.go\nAuto-merging internal/runtime/executor/help...",
+  "timestamp": "2026-04-04T12:08:05.128Z",
+  "retry_count": 1
+}
