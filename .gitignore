@@ -59,3 +59,5 @@ _bmad-output/*
 .opencode/
 .cli-proxy-api/
 .venv/
+
+.omc/
