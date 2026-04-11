@@ -44,6 +44,7 @@ GEMINI.md
 .agents/*
 .opencode/*
 .idea/*
+.beads/*
 .bmad/*
 _bmad/*
 _bmad-output/*
@@ -54,10 +55,6 @@ _bmad-output/*
 .DS_Store
 ._*
 
-# Opencode
-.beads/
-.opencode/
+# Local-only
 .cli-proxy-api/
 .venv/
-
-.omc/
