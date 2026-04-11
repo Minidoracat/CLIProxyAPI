@@ -280,6 +280,10 @@ func ParseClaudeUsage(data []byte) usage.Detail {
 	return detail
 }
 
+// ParseClaudeStreamUsage is intentionally removed.
+// Use ClaudeStreamUsageAccumulator.ProcessLine instead, which merges
+// usage fields across all SSE events and publishes once at stream end.
+
 // claudeThinkingTokenFactor is the approximate characters-per-token ratio
 // used to estimate thinking token counts from content block text length.
 const claudeThinkingTokenFactor = 4
@@ -315,7 +319,7 @@ func claudeStreamThinkingLen(line []byte) int {
 	return len(delta.Get("thinking").String())
 }
 
-// claudeStreamUsageAccumulator merges usage fields across Claude SSE events
+// ClaudeStreamUsageAccumulator merges usage fields across Claude SSE events
 // and accumulates thinking content block lengths for reasoning token estimation.
 // message_start carries input_tokens + cache_read_input_tokens (under message.usage),
 // message_delta carries output_tokens (under usage), and content_block_delta carries
@@ -326,7 +330,7 @@ type ClaudeStreamUsageAccumulator struct {
 	sawUsage    bool
 }
 
-// processLine extracts usage and thinking data from a single SSE line.
+// ProcessLine extracts usage and thinking data from a single SSE line.
 func (a *ClaudeStreamUsageAccumulator) ProcessLine(line []byte) {
 	a.thinkingLen += int64(claudeStreamThinkingLen(line))
 
