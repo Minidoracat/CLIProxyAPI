@@ -58,3 +58,4 @@ _bmad-output/*
 # Local-only
 .cli-proxy-api/
 .venv/
+.gocache/

@@ -68,6 +68,11 @@ type Config struct {
 	// UsageStatisticsPersistence configures PostgreSQL-backed persistence for usage statistics.
 	UsageStatisticsPersistence UsagePersistenceConfig `yaml:"usage-statistics-persistence" json:"usage-statistics-persistence"`
 
+	// RedisUsageQueueRetentionSeconds controls how long (in seconds) usage queue items
+	// are retained in memory for the Redis RESP interface (LPOP/RPOP).
+	// Default: 60. Max: 3600.
+	RedisUsageQueueRetentionSeconds int `yaml:"redis-usage-queue-retention-seconds" json:"redis-usage-queue-retention-seconds"`
+
 	// DisableCooling disables quota cooldown scheduling when true.
 	DisableCooling bool `yaml:"disable-cooling" json:"disable-cooling"`
 
@@ -146,8 +151,8 @@ type Config struct {
 	// Claude1MContext controls the context-1m-2025-08-07 Anthropic Beta feature.
 	// When enabled, the 1M context beta header is added to requests for accounts
 	// that have enable_1m_context set in their auth file, limited to the listed models.
-	Claude1MContext Claude1MContext `yaml:"claude-1m-context" json:"claude-1m-context"`
-	legacyMigrationPending bool `yaml:"-" json:"-"`
+	Claude1MContext        Claude1MContext `yaml:"claude-1m-context" json:"claude-1m-context"`
+	legacyMigrationPending bool            `yaml:"-" json:"-"`
 }
 
 // ClaudeHeaderDefaults configures default header values injected into Claude API requests.
@@ -260,7 +265,9 @@ type RoutingConfig struct {
 
 	// SessionAffinity enables universal session-sticky routing for all clients.
 	// Session IDs are extracted from multiple sources:
-	// X-Session-ID header, Idempotency-Key, metadata.user_id, conversation_id, or message hash.
+	// metadata.user_id (Claude Code session format), X-Session-ID, Session_id (Codex),
+	// X-Amp-Thread-Id (Amp CLI thread), X-Client-Request-Id (PI), metadata.user_id,
+	// conversation_id, or message hash.
 	// Automatic failover is always enabled when bound auth becomes unavailable.
 	SessionAffinity bool `yaml:"session-affinity,omitempty" json:"session-affinity,omitempty"`
 
@@ -560,6 +567,9 @@ type OpenAICompatibility struct {
 	// Higher values are preferred; defaults to 0.
 	Priority int `yaml:"priority,omitempty" json:"priority,omitempty"`
 
+	// Disabled prevents this provider from being used for routing.
+	Disabled bool `yaml:"disabled,omitempty" json:"disabled,omitempty"`
+
 	// Prefix optionally namespaces model aliases for this provider (e.g., "teamA/kimi-k2").
 	Prefix string `yaml:"prefix,omitempty" json:"prefix,omitempty"`
 
@@ -650,7 +660,9 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 	cfg.UsageStatisticsPersistence.BatchSize = 100
 	cfg.UsageStatisticsPersistence.SnapshotFlushIntervalSeconds = 15
 	cfg.UsageStatisticsPersistence.BootstrapOnStart = true
+	cfg.RedisUsageQueueRetentionSeconds = 60
 	cfg.DisableCooling = false
+	cfg.DisableImageGeneration = DisableImageGenerationOff
 	cfg.Pprof.Enable = false
 	cfg.Pprof.Addr = DefaultPprofAddr
 	cfg.AmpCode.RestrictManagementToLocalhost = false // Default to false: API key auth is sufficient
@@ -709,6 +721,13 @@ func LoadConfigOptional(configFile string, optional bool) (*Config, error) {
 
 	if cfg.ErrorLogsMaxFiles < 0 {
 		cfg.ErrorLogsMaxFiles = 10
+	}
+
+	if cfg.RedisUsageQueueRetentionSeconds <= 0 {
+		cfg.RedisUsageQueueRetentionSeconds = 60
+	} else if cfg.RedisUsageQueueRetentionSeconds > 3600 {
+		log.WithField("value", cfg.RedisUsageQueueRetentionSeconds).Warn("redis-usage-queue-retention-seconds too large; clamping to 3600")
+		cfg.RedisUsageQueueRetentionSeconds = 3600
 	}
 
 	if cfg.MaxRetryCredentials < 0 {

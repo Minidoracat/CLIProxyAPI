@@ -1,6 +1,7 @@
 package helps
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -47,6 +48,50 @@ func TestParseOpenAIUsageResponses(t *testing.T) {
 	}
 }
 
+func TestParseGeminiCLIUsage_TopLevelUsageMetadata(t *testing.T) {
+	data := []byte(`{"usageMetadata":{"promptTokenCount":11,"candidatesTokenCount":7,"thoughtsTokenCount":3,"totalTokenCount":21,"cachedContentTokenCount":5}}`)
+	detail := ParseGeminiCLIUsage(data)
+	if detail.InputTokens != 11 {
+		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 11)
+	}
+	if detail.OutputTokens != 7 {
+		t.Fatalf("output tokens = %d, want %d", detail.OutputTokens, 7)
+	}
+	if detail.ReasoningTokens != 3 {
+		t.Fatalf("reasoning tokens = %d, want %d", detail.ReasoningTokens, 3)
+	}
+	if detail.TotalTokens != 21 {
+		t.Fatalf("total tokens = %d, want %d", detail.TotalTokens, 21)
+	}
+	if detail.CachedTokens != 5 {
+		t.Fatalf("cached tokens = %d, want %d", detail.CachedTokens, 5)
+	}
+}
+
+func TestParseGeminiCLIStreamUsage_ResponseSnakeCaseUsageMetadata(t *testing.T) {
+	line := []byte(`data: {"response":{"usage_metadata":{"promptTokenCount":13,"candidatesTokenCount":2,"totalTokenCount":15}}}`)
+	detail, ok := ParseGeminiCLIStreamUsage(line)
+	if !ok {
+		t.Fatal("ParseGeminiCLIStreamUsage() ok = false, want true")
+	}
+	if detail.InputTokens != 13 {
+		t.Fatalf("input tokens = %d, want %d", detail.InputTokens, 13)
+	}
+	if detail.OutputTokens != 2 {
+		t.Fatalf("output tokens = %d, want %d", detail.OutputTokens, 2)
+	}
+	if detail.TotalTokens != 15 {
+		t.Fatalf("total tokens = %d, want %d", detail.TotalTokens, 15)
+	}
+}
+
+func TestParseGeminiCLIStreamUsage_IgnoresTrafficTypeOnlyUsageMetadata(t *testing.T) {
+	line := []byte(`data: {"response":{"usageMetadata":{"trafficType":"ON_DEMAND"}}}`)
+	if detail, ok := ParseGeminiCLIStreamUsage(line); ok {
+		t.Fatalf("ParseGeminiCLIStreamUsage() = (%+v, true), want false for traffic-only usage metadata", detail)
+	}
+}
+
 func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	reporter := &UsageReporter{
 		provider:    "openai",
@@ -63,8 +108,8 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 }
 
-	func TestClaudeStreamAccumulator_FullSequence(t *testing.T) {
-	// Simulate: message_start (input+cache) → thinking_delta → message_delta (output)
+func TestClaudeStreamAccumulator_FullSequence(t *testing.T) {
+	// Simulate message_start, thinking_delta, then message_delta.
 	var acc ClaudeStreamUsageAccumulator
 	acc.ProcessLine([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":50000}}}`))
 	acc.ProcessLine([]byte(`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"Let me think about this carefully step by step"}}`))
@@ -88,7 +133,7 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 }
 
-	func TestClaudeStreamAccumulator_MessageStartOnly(t *testing.T) {
+func TestClaudeStreamAccumulator_MessageStartOnly(t *testing.T) {
 	var acc ClaudeStreamUsageAccumulator
 	acc.ProcessLine([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":5,"cache_read_input_tokens":100000}}}`))
 
@@ -106,7 +151,7 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 }
 
-	func TestClaudeStreamAccumulator_MessageDeltaOnly(t *testing.T) {
+func TestClaudeStreamAccumulator_MessageDeltaOnly(t *testing.T) {
 	var acc ClaudeStreamUsageAccumulator
 	acc.ProcessLine([]byte(`data: {"type":"message_delta","usage":{"output_tokens":150}}`))
 
@@ -121,8 +166,8 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 }
 
-	func TestClaudeStreamAccumulator_ThinkingDeltaOnly_NoUsage(t *testing.T) {
-	// Stream with only thinking deltas but no usage event — should not publish
+func TestClaudeStreamAccumulator_ThinkingDeltaOnly_NoUsage(t *testing.T) {
+	// Stream with only thinking deltas but no usage event should not publish.
 	var acc ClaudeStreamUsageAccumulator
 	acc.ProcessLine([]byte(`data: {"type":"content_block_delta","delta":{"type":"thinking_delta","thinking":"some thinking text"}}`))
 
@@ -134,19 +179,50 @@ func TestUsageReporterBuildRecordIncludesLatency(t *testing.T) {
 	}
 }
 
-	func TestClaudeStreamAccumulator_NoEvents(t *testing.T) {
-	// Empty/interrupted stream — should not publish
+func TestClaudeStreamAccumulator_NoEvents(t *testing.T) {
+	// Empty/interrupted stream should not publish.
 	var acc ClaudeStreamUsageAccumulator
 	if acc.sawUsage {
 		t.Fatal("sawUsage should be false for empty accumulator")
 	}
 }
 
-	func TestClaudeStreamAccumulator_CacheCreationFallback(t *testing.T) {
+func TestClaudeStreamAccumulator_CacheCreationFallback(t *testing.T) {
 	var acc ClaudeStreamUsageAccumulator
 	acc.ProcessLine([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":3,"cache_creation_input_tokens":80000}}}`))
 
 	if acc.detail.CachedTokens != 80000 {
 		t.Fatalf("cached tokens = %d, want 80000 (from cache_creation fallback)", acc.detail.CachedTokens)
+	}
+}
+
+func TestUsageReporterBuildRecordIncludesRequestedModelAlias(t *testing.T) {
+	ctx := usage.WithRequestedModelAlias(context.Background(), "client-gpt")
+	reporter := NewUsageReporter(ctx, "openai", "gpt-5.4", nil)
+
+	record := reporter.buildRecord(usage.Detail{TotalTokens: 3}, false)
+	if record.Model != "gpt-5.4" {
+		t.Fatalf("model = %q, want %q", record.Model, "gpt-5.4")
+	}
+	if record.Alias != "client-gpt" {
+		t.Fatalf("alias = %q, want %q", record.Alias, "client-gpt")
+	}
+}
+
+func TestUsageReporterBuildAdditionalModelRecordSkipsZeroTokens(t *testing.T) {
+	reporter := &UsageReporter{
+		provider:    "codex",
+		model:       "gpt-5.4",
+		requestedAt: time.Now(),
+	}
+
+	if _, ok := reporter.buildAdditionalModelRecord("gpt-image-2", usage.Detail{}); ok {
+		t.Fatalf("expected all-zero token usage to be skipped")
+	}
+	if _, ok := reporter.buildAdditionalModelRecord("gpt-image-2", usage.Detail{InputTokens: 2}); !ok {
+		t.Fatalf("expected non-zero input token usage to be recorded")
+	}
+	if _, ok := reporter.buildAdditionalModelRecord("gpt-image-2", usage.Detail{CachedTokens: 2}); !ok {
+		t.Fatalf("expected non-zero cached token usage to be recorded")
 	}
 }
