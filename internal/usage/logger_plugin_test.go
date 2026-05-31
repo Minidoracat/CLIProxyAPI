@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	coreusage "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/usage"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 func TestRequestStatisticsRecordIncludesLatency(t *testing.T) {
@@ -123,9 +123,9 @@ func TestReplaceFromSnapshotRestoresAggregates(t *testing.T) {
 
 	// Pre-populate with some data that should be overwritten
 	stats.Record(context.Background(), coreusage.Record{
-		APIKey:  "old-key",
-		Model:   "old-model",
-		Detail:  coreusage.Detail{TotalTokens: 999},
+		APIKey: "old-key",
+		Model:  "old-model",
+		Detail: coreusage.Detail{TotalTokens: 999},
 	})
 
 	snapshot := StatisticsSnapshot{
