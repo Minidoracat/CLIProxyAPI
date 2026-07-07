@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -21,22 +22,37 @@ import (
 )
 
 type UsageReporter struct {
-	provider    string
-	model       string
-	alias       string
-	authID      string
-	authIndex   string
-	authType    string
-	apiKey      string
-	source      string
-	reasoning   string
-	serviceTier string
-	requestedAt time.Time
-	ttftMu      sync.RWMutex
-	ttft        time.Duration
-	ttftStart   time.Time
-	ttftSet     bool
-	once        sync.Once
+	provider     string
+	executorType string
+	model        string
+	alias        string
+	authID       string
+	authIndex    string
+	authType     string
+	apiKey       string
+	source       string
+	reasoning    string
+	serviceTier  string
+	requestedAt  time.Time
+	ttftMu       sync.RWMutex
+	ttft         time.Duration
+	ttftStart    time.Time
+	ttftSet      bool
+	once         sync.Once
+}
+
+type usageExecutor interface {
+	Identifier() string
+}
+
+func NewExecutorUsageReporter(ctx context.Context, executor usageExecutor, model string, auth *cliproxyauth.Auth) *UsageReporter {
+	provider := ""
+	if executor != nil {
+		provider = executor.Identifier()
+	}
+	reporter := NewUsageReporter(ctx, provider, model, auth)
+	reporter.executorType = ExecutorTypeName(executor)
+	return reporter
 }
 
 func NewUsageReporter(ctx context.Context, provider, model string, auth *cliproxyauth.Auth) *UsageReporter {
@@ -61,6 +77,17 @@ func NewUsageReporter(ctx context.Context, provider, model string, auth *cliprox
 		reporter.authIndex = auth.EnsureIndex()
 	}
 	return reporter
+}
+
+func ExecutorTypeName(executor any) string {
+	if executor == nil {
+		return ""
+	}
+	executorType := reflect.TypeOf(executor)
+	for executorType.Kind() == reflect.Pointer {
+		executorType = executorType.Elem()
+	}
+	return strings.TrimSpace(executorType.Name())
 }
 
 func (r *UsageReporter) Publish(ctx context.Context, detail usage.Detail) {
@@ -234,6 +261,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 	}
 	return usage.Record{
 		Provider:        r.provider,
+		ExecutorType:    r.executorType,
 		Model:           model,
 		Alias:           r.alias,
 		Source:          r.source,
@@ -376,11 +404,6 @@ func APIKeyFromContext(ctx context.Context) string {
 func resolveUsageSource(auth *cliproxyauth.Auth, ctxAPIKey string) string {
 	if auth != nil {
 		provider := strings.TrimSpace(auth.Provider)
-		if strings.EqualFold(provider, "gemini-cli") {
-			if id := strings.TrimSpace(auth.ID); id != "" {
-				return id
-			}
-		}
 		if strings.EqualFold(provider, "vertex") {
 			if auth.Metadata != nil {
 				if projectID, ok := auth.Metadata["project_id"].(string); ok {
@@ -421,12 +444,7 @@ func resolveUsageAuthType(auth *cliproxyauth.Auth) string {
 	if auth == nil {
 		return ""
 	}
-	kind, _ := auth.AccountInfo()
-	kind = strings.TrimSpace(kind)
-	if kind == "api_key" {
-		return "apikey"
-	}
-	return kind
+	return auth.AuthKind()
 }
 
 func ParseCodexUsage(data []byte) (usage.Detail, bool) {
@@ -658,26 +676,51 @@ func parseGeminiFamilyUsageDetail(node gjson.Result) usage.Detail {
 	return detail
 }
 
-func hasGeminiFamilyUsageTokenFields(node gjson.Result) bool {
-	return node.Get("promptTokenCount").Exists() ||
-		node.Get("candidatesTokenCount").Exists() ||
-		node.Get("thoughtsTokenCount").Exists() ||
-		node.Get("totalTokenCount").Exists() ||
-		node.Get("cachedContentTokenCount").Exists()
+func parseInteractionsUsageDetail(node gjson.Result) usage.Detail {
+	detail := usage.Detail{
+		InputTokens:         firstExistingUsageNode(node, "input_tokens", "prompt_tokens", "total_input_tokens").Int(),
+		OutputTokens:        firstExistingUsageNode(node, "output_tokens", "completion_tokens", "total_output_tokens").Int(),
+		ReasoningTokens:     firstExistingUsageNode(node, "reasoning_tokens", "thoughtsTokenCount", "total_thought_tokens").Int(),
+		TotalTokens:         firstExistingUsageNode(node, "total_tokens", "totalTokenCount").Int(),
+		CachedTokens:        firstExistingUsageNode(node, "cached_tokens", "cachedContentTokenCount", "total_cached_tokens").Int(),
+		CacheReadTokens:     firstExistingUsageNode(node, "cache_read_tokens", "cacheReadTokens").Int(),
+		CacheCreationTokens: firstExistingUsageNode(node, "cache_creation_tokens", "cacheCreationTokens").Int(),
+	}
+	if detail.TotalTokens == 0 {
+		detail.TotalTokens = detail.InputTokens + detail.OutputTokens + detail.ReasoningTokens + detail.CacheReadTokens + detail.CacheCreationTokens
+	}
+	return detail
 }
 
-func ParseGeminiCLIUsage(data []byte) usage.Detail {
-	usageNode := gjson.ParseBytes(data)
-	node := firstExistingUsageNode(usageNode,
-		"response.usageMetadata",
-		"response.usage_metadata",
-		"usageMetadata",
-		"usage_metadata",
-	)
+func hasUsageDetail(detail usage.Detail) bool {
+	return hasNonZeroTokenUsage(detail)
+}
+
+func ParseInteractionsUsage(data []byte) usage.Detail {
+	root := gjson.ParseBytes(data)
+	node := firstExistingUsageNode(root, "usage", "total_usage", "metadata.total_usage", "metadata.usage", "usageMetadata", "usage_metadata", "interaction.usage", "interaction.total_usage", "interaction.metadata.total_usage")
 	if !node.Exists() {
 		return usage.Detail{}
 	}
-	return parseGeminiFamilyUsageDetail(node)
+	if node.Get("promptTokenCount").Exists() || node.Get("candidatesTokenCount").Exists() {
+		return parseGeminiFamilyUsageDetail(node)
+	}
+	return parseInteractionsUsageDetail(node)
+}
+
+func ParseInteractionsStreamUsage(line []byte) (usage.Detail, bool) {
+	payload := jsonPayload(line)
+	if len(payload) == 0 {
+		payload = line
+	}
+	if len(payload) == 0 || !gjson.ValidBytes(payload) {
+		return usage.Detail{}, false
+	}
+	detail := ParseInteractionsUsage(payload)
+	if !hasUsageDetail(detail) {
+		return usage.Detail{}, false
+	}
+	return detail, true
 }
 
 func ParseGeminiUsage(data []byte) usage.Detail {
@@ -702,27 +745,6 @@ func ParseGeminiStreamUsage(line []byte) (usage.Detail, bool) {
 		node = gjson.GetBytes(payload, "usage_metadata")
 	}
 	if !node.Exists() {
-		return usage.Detail{}, false
-	}
-	return parseGeminiFamilyUsageDetail(node), true
-}
-
-func ParseGeminiCLIStreamUsage(line []byte) (usage.Detail, bool) {
-	payload := jsonPayload(line)
-	if len(payload) == 0 || !gjson.ValidBytes(payload) {
-		return usage.Detail{}, false
-	}
-	root := gjson.ParseBytes(payload)
-	node := firstExistingUsageNode(root,
-		"response.usageMetadata",
-		"response.usage_metadata",
-		"usageMetadata",
-		"usage_metadata",
-	)
-	if !node.Exists() {
-		return usage.Detail{}, false
-	}
-	if !hasGeminiFamilyUsageTokenFields(node) {
 		return usage.Detail{}, false
 	}
 	return parseGeminiFamilyUsageDetail(node), true

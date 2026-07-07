@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/cache"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	log "github.com/sirupsen/logrus"
 	"github.com/sirupsen/logrus/hooks/test"
 	"github.com/tidwall/gjson"
@@ -130,6 +131,191 @@ func TestConvertClaudeRequestToAntigravity_StripsClaudeCodeAttribution(t *testin
 	}
 	if got := parts[0].Get("text").String(); got != "Antigravity system prompt" {
 		t.Fatalf("Unexpected system part: %q", got)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_ConvertsMessageSystemRoleToUserContent(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gemini-3.5-flash",
+		"system": [{"type": "text", "text": "Top-level rules"}],
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "Hello"}]},
+			{"role": "system", "content": "String mid-conversation rule"},
+			{"role": "system", "content": [{"type": "text", "text": "Array mid-conversation rule"}]}
+		]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("gemini-3-flash-agent", inputJSON, false)
+	outputStr := string(output)
+
+	if systemContent := gjson.Get(outputStr, `request.contents.#(role=="system")`); systemContent.Exists() {
+		t.Fatalf("system role should not be emitted in request.contents: %s", systemContent.Raw)
+	}
+
+	contents := gjson.Get(outputStr, "request.contents").Array()
+	if len(contents) != 3 {
+		t.Fatalf("Expected the user and message-level system turns in request.contents, got %d: %s", len(contents), gjson.Get(outputStr, "request.contents").Raw)
+	}
+	if got := contents[0].Get("role").String(); got != "user" {
+		t.Fatalf("Expected first content role user, got %q", got)
+	}
+	if got := contents[1].Get("role").String(); got != "user" {
+		t.Fatalf("Expected message-level system content to be downgraded to user role, got %q", got)
+	}
+	if got := contents[1].Get("parts.0.text").String(); got != "<system-reminder>\nString mid-conversation rule\n</system-reminder>" {
+		t.Fatalf("Unexpected string message-level system content text: %q", got)
+	}
+	if got := contents[2].Get("role").String(); got != "user" {
+		t.Fatalf("Expected array message-level system content to be downgraded to user role, got %q", got)
+	}
+	if got := contents[2].Get("parts.0.text").String(); got != "<system-reminder>\nArray mid-conversation rule\n</system-reminder>" {
+		t.Fatalf("Unexpected array message-level system content text: %q", got)
+	}
+
+	parts := gjson.Get(outputStr, "request.systemInstruction.parts").Array()
+	if len(parts) != 1 {
+		t.Fatalf("Expected only top-level system parts, got %d: %s", len(parts), gjson.Get(outputStr, "request.systemInstruction.parts").Raw)
+	}
+	if got := parts[0].Get("text").String(); got != "Top-level rules" {
+		t.Fatalf("Unexpected first system part: %q", got)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_MapsTypedWebSearchToIndependentSearchRequest(t *testing.T) {
+	registry.GetGlobalRegistry().RegisterClient("test-antigravity-claude-websearch", "antigravity", []*registry.ModelInfo{
+		{ID: "gemini-3.1-flash-lite", SupportsWebSearch: true},
+	})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient("test-antigravity-claude-websearch") })
+
+	inputJSON := []byte(`{
+		"model": "gemini-3.1-flash-lite",
+		"messages": [{"role": "user", "content": "北京天气 2026-06-12"}],
+		"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8, "allowed_domains": ["www.baidu.com", "weather.com.cn"]}]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("gemini-3.1-flash-lite", inputJSON, true)
+	if got := gjson.GetBytes(output, "requestType").String(); got != "web_search" {
+		t.Fatalf("requestType = %q, want web_search: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.contents.0.parts.0.text").String(); got != "北京天气 2026-06-12" {
+		t.Fatalf("search query = %q, want original user query: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.systemInstruction.parts.0.text").String(); got != antigravityWebSearchSystemInstruction {
+		t.Fatalf("unexpected search system instruction: %q", got)
+	}
+	if got := gjson.GetBytes(output, "request.tools.0.googleSearch.enhancedContent.imageSearch.maxResultCount").Int(); got != 8 {
+		t.Fatalf("image search maxResultCount = %d, want 8: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.tools.0.googleSearch.includedDomains.0").String(); got != "www.baidu.com" {
+		t.Fatalf("includedDomains.0 = %q, want www.baidu.com: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.tools.0.googleSearch.includedDomains.1").String(); got != "weather.com.cn" {
+		t.Fatalf("includedDomains.1 = %q, want weather.com.cn: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.generationConfig.candidateCount").Int(); got != 1 {
+		t.Fatalf("candidateCount = %d, want 1: %s", got, output)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_UsesDefaultWebSearchMaxResultCountWithoutMaxUses(t *testing.T) {
+	registry.GetGlobalRegistry().RegisterClient("test-antigravity-claude-websearch-default-max", "antigravity", []*registry.ModelInfo{
+		{ID: "gemini-3.1-flash-lite", SupportsWebSearch: true},
+	})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient("test-antigravity-claude-websearch-default-max") })
+
+	inputJSON := []byte(`{
+		"model": "gemini-3.1-flash-lite",
+		"messages": [{"role": "user", "content": "北京天气 2026-06-12"}],
+		"tools": [{"type": "web_search_20250305", "name": "web_search"}]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("gemini-3.1-flash-lite", inputJSON, true)
+	if got := gjson.GetBytes(output, "request.tools.0.googleSearch.enhancedContent.imageSearch.maxResultCount").Int(); got != 5 {
+		t.Fatalf("image search maxResultCount = %d, want default 5: %s", got, output)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_DoesNotMapTypedWebSearchWhenMixedWithCustomTools(t *testing.T) {
+	registry.GetGlobalRegistry().RegisterClient("test-antigravity-claude-websearch-mixed", "antigravity", []*registry.ModelInfo{
+		{ID: "gemini-3.1-flash-lite", SupportsWebSearch: true},
+	})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient("test-antigravity-claude-websearch-mixed") })
+
+	inputJSON := []byte(`{
+		"model": "gemini-3.1-flash-lite",
+		"messages": [{"role": "user", "content": "Search current weather"}],
+		"tools": [
+			{"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
+			{"name": "lookup", "description": "Lookup local data", "input_schema": {"type": "object", "properties": {}}}
+		]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("gemini-3.1-flash-lite", inputJSON, true)
+	if got := gjson.GetBytes(output, "requestType").String(); got == "web_search" {
+		t.Fatalf("mixed tools should not become independent web_search request: %s", output)
+	}
+	if got := gjson.GetBytes(output, "request.tools.#(googleSearch)").Raw; got != "" {
+		t.Fatalf("mixed tools should not inject native googleSearch into chat request: %s", output)
+	}
+	if got := gjson.GetBytes(output, `request.tools.#.functionDeclarations.#(name=="lookup")`).Raw; got == "" {
+		t.Fatalf("custom tool declaration should be preserved: %s", output)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_DoesNotMapTypedWebSearchForUnsupportedRouteModel(t *testing.T) {
+	registry.GetGlobalRegistry().RegisterClient("test-antigravity-claude-websearch-route", "antigravity", []*registry.ModelInfo{
+		{ID: "gemini-3.5-flash"},
+		{ID: "gemini-3.1-flash-lite", SupportsWebSearch: true},
+	})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient("test-antigravity-claude-websearch-route") })
+
+	inputJSON := []byte(`{
+		"model": "gemini-3.5-flash",
+		"messages": [{"role": "user", "content": "Perform a web search"}],
+		"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("gemini-3.5-flash", inputJSON, true)
+	if got := gjson.GetBytes(output, "model").String(); got != "gemini-3.5-flash" {
+		t.Fatalf("web search request model = %q, want original route model: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.tools.#(googleSearch)").Raw; got != "" {
+		t.Fatalf("typed web_search should not become native googleSearch for unsupported route model: %s", output)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_DoesNotMapTypedWebSearchForFlashAgentWithoutCapability(t *testing.T) {
+	registry.GetGlobalRegistry().RegisterClient("test-antigravity-claude-websearch-flash-agent", "antigravity", []*registry.ModelInfo{
+		{ID: "gemini-3-flash-agent"},
+		{ID: "gemini-3.1-flash-lite", SupportsWebSearch: true},
+	})
+	t.Cleanup(func() { registry.GetGlobalRegistry().UnregisterClient("test-antigravity-claude-websearch-flash-agent") })
+
+	inputJSON := []byte(`{
+		"model": "gemini-3-flash-agent",
+		"messages": [{"role": "user", "content": "Perform a web search"}],
+		"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("gemini-3-flash-agent", inputJSON, true)
+	if got := gjson.GetBytes(output, "model").String(); got != "gemini-3-flash-agent" {
+		t.Fatalf("web search request model = %q, want original route model: %s", got, output)
+	}
+	if got := gjson.GetBytes(output, "request.tools.#(googleSearch)").Raw; got != "" {
+		t.Fatalf("typed web_search should not become native googleSearch for flash-agent without capability: %s", output)
+	}
+}
+
+func TestConvertClaudeRequestToAntigravity_DoesNotMapTypedWebSearchForOtherModels(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "claude-sonnet-4-6",
+		"messages": [{"role": "user", "content": "Search current weather"}],
+		"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 8}]
+	}`)
+
+	output := ConvertClaudeRequestToAntigravity("claude-sonnet-4-6", inputJSON, true)
+	if got := gjson.GetBytes(output, "request.tools.#(googleSearch)").Raw; got != "" {
+		t.Fatalf("model without Antigravity web search capability should not get native googleSearch: %s", output)
 	}
 }
 
