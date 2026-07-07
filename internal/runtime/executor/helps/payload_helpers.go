@@ -3,6 +3,7 @@ package helps
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"reflect"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/thinking"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	log "github.com/sirupsen/logrus"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -41,7 +43,7 @@ func ApplyPayloadConfigWithRequest(cfg *config.Config, model, protocol, fromProt
 	}
 
 	rules := cfg.Payload
-	hasPayloadRules := len(rules.Default) != 0 || len(rules.DefaultRaw) != 0 || len(rules.Override) != 0 || len(rules.OverrideRaw) != 0 || len(rules.Filter) != 0
+	hasPayloadRules := len(rules.Default) != 0 || len(rules.DefaultRaw) != 0 || len(rules.DefaultFile) != 0 || len(rules.Override) != 0 || len(rules.OverrideRaw) != 0 || len(rules.OverrideFile) != 0 || len(rules.Filter) != 0
 	if hasPayloadRules {
 		model = strings.TrimSpace(model)
 		requestedModel = strings.TrimSpace(requestedModel)
@@ -110,6 +112,36 @@ func ApplyPayloadConfigWithRequest(cfg *config.Config, model, protocol, fromProt
 					}
 				}
 			}
+			// Apply default file rules: first write wins per field across all matching rules.
+			for i := range rules.DefaultFile {
+				rule := &rules.DefaultFile[i]
+				if !payloadModelRulesMatch(rule.Models, protocol, fromProtocol, headers, out, root, candidates) {
+					continue
+				}
+				for path, value := range rule.Params {
+					fullPath := buildPayloadPath(root, path)
+					if fullPath == "" {
+						continue
+					}
+					if gjson.GetBytes(source, fullPath).Exists() {
+						continue
+					}
+					if _, ok := appliedDefaults[fullPath]; ok {
+						continue
+					}
+					fileValue, ok := payloadFileValue(value)
+					if !ok {
+						continue
+					}
+					updated, errSet := sjson.SetBytes(out, fullPath, string(fileValue))
+					if errSet != nil {
+						continue
+					}
+					out = updated
+					logPayloadFileRuleApplied("default-file", model, requestedModel, protocol, fullPath, value, len(fileValue))
+					appliedDefaults[fullPath] = struct{}{}
+				}
+			}
 			// Apply override rules: last write wins per field across all matching rules.
 			for i := range rules.Override {
 				rule := &rules.Override[i]
@@ -152,6 +184,29 @@ func ApplyPayloadConfigWithRequest(cfg *config.Config, model, protocol, fromProt
 						}
 						out = updated
 					}
+				}
+			}
+			// Apply override file rules: last write wins per field across all matching rules.
+			for i := range rules.OverrideFile {
+				rule := &rules.OverrideFile[i]
+				if !payloadModelRulesMatch(rule.Models, protocol, fromProtocol, headers, out, root, candidates) {
+					continue
+				}
+				for path, value := range rule.Params {
+					fullPath := buildPayloadPath(root, path)
+					if fullPath == "" {
+						continue
+					}
+					fileValue, ok := payloadFileValue(value)
+					if !ok {
+						continue
+					}
+					updated, errSet := sjson.SetBytes(out, fullPath, string(fileValue))
+					if errSet != nil {
+						continue
+					}
+					out = updated
+					logPayloadFileRuleApplied("override-file", model, requestedModel, protocol, fullPath, value, len(fileValue))
 				}
 			}
 			// Apply filter rules: remove matching paths from payload.
@@ -818,6 +873,41 @@ func payloadRawValue(value any) ([]byte, bool) {
 		}
 		return raw, true
 	}
+}
+
+func payloadFileValue(value any) ([]byte, bool) {
+	path := ""
+	switch typed := value.(type) {
+	case string:
+		path = typed
+	case []byte:
+		path = string(typed)
+	default:
+		return nil, false
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, false
+	}
+	content, errRead := os.ReadFile(path)
+	if errRead != nil {
+		log.WithError(errRead).WithField("path", path).Warn("payload file rule skipped: failed to read file")
+		return nil, false
+	}
+	return content, true
+}
+
+func logPayloadFileRuleApplied(ruleType, model, requestedModel, protocol, path string, value any, bytesRead int) {
+	filePath, _ := value.(string)
+	log.WithFields(log.Fields{
+		"rule_type":       ruleType,
+		"model":           model,
+		"requested_model": requestedModel,
+		"protocol":        protocol,
+		"path":            path,
+		"file":            strings.TrimSpace(filePath),
+		"bytes":           bytesRead,
+	}).Debug("payload file rule applied")
 }
 
 func PayloadRequestedModel(opts cliproxyexecutor.Options, fallback string) string {

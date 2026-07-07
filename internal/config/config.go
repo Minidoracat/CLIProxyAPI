@@ -354,10 +354,14 @@ type PayloadConfig struct {
 	Default []PayloadRule `yaml:"default" json:"default"`
 	// DefaultRaw defines rules that set raw JSON values only when they are missing.
 	DefaultRaw []PayloadRule `yaml:"default-raw" json:"default-raw"`
+	// DefaultFile defines rules that set file contents only when parameters are missing.
+	DefaultFile []PayloadRule `yaml:"default-file" json:"default-file"`
 	// Override defines rules that always set parameters, overwriting any existing values.
 	Override []PayloadRule `yaml:"override" json:"override"`
 	// OverrideRaw defines rules that always set raw JSON values, overwriting any existing values.
 	OverrideRaw []PayloadRule `yaml:"override-raw" json:"override-raw"`
+	// OverrideFile defines rules that always set file contents, overwriting existing values.
+	OverrideFile []PayloadRule `yaml:"override-file" json:"override-file"`
 	// Filter defines rules that remove parameters from the payload by JSON path.
 	Filter []PayloadFilterRule `yaml:"filter" json:"filter"`
 }
