@@ -118,6 +118,43 @@ func TestModelDetailsRingBufferCap(t *testing.T) {
 	}
 }
 
+func TestModelTokenAggregatesSurviveDetailEviction(t *testing.T) {
+	stats := NewRequestStatistics()
+	for i := 0; i < 250; i++ {
+		stats.Record(context.Background(), coreusage.Record{
+			APIKey:      "test-key",
+			Model:       "gpt-5.6-sol",
+			RequestedAt: time.Date(2026, 7, 14, 0, 0, i, 0, time.UTC),
+			Detail: coreusage.Detail{
+				InputTokens:  100,
+				OutputTokens: 20,
+				CachedTokens: 40,
+				TotalTokens:  120,
+			},
+		})
+	}
+
+	model := stats.Snapshot().APIs["test-key"].Models["gpt-5.6-sol"]
+	if len(model.Details) != DefaultMaxDetailsPerModel {
+		t.Fatalf("details len = %d, want %d", len(model.Details), DefaultMaxDetailsPerModel)
+	}
+	if !model.TokenStatsComplete {
+		t.Fatal("TokenStatsComplete = false, want true")
+	}
+	if model.Tokens.InputTokens != 25000 {
+		t.Fatalf("InputTokens = %d, want 25000", model.Tokens.InputTokens)
+	}
+	if model.Tokens.OutputTokens != 5000 {
+		t.Fatalf("OutputTokens = %d, want 5000", model.Tokens.OutputTokens)
+	}
+	if model.Tokens.CachedTokens != 10000 {
+		t.Fatalf("CachedTokens = %d, want 10000", model.Tokens.CachedTokens)
+	}
+	if model.Tokens.TotalTokens != 30000 {
+		t.Fatalf("TotalTokens = %d, want 30000", model.Tokens.TotalTokens)
+	}
+}
+
 func TestReplaceFromSnapshotRestoresAggregates(t *testing.T) {
 	stats := NewRequestStatistics()
 
@@ -210,6 +247,49 @@ func TestReplaceFromSnapshotRestoresAggregates(t *testing.T) {
 	// Verify pre-existing data was overwritten (old-key should be gone)
 	if _, exists := s.APIs["old-key"]; exists {
 		t.Fatal("old-key should have been overwritten by ReplaceFromSnapshot")
+	}
+}
+
+func TestReplaceFromSnapshotTracksKnownTokensForPartialHistory(t *testing.T) {
+	stats := NewRequestStatistics()
+	snapshot := StatisticsSnapshot{
+		TotalRequests: 3,
+		TotalTokens:   360,
+		APIs: map[string]APISnapshot{
+			"test-key": {
+				TotalRequests: 3,
+				TotalTokens:   360,
+				Models: map[string]ModelSnapshot{
+					"gpt-5.5": {
+						TotalRequests: 3,
+						TotalTokens:   360,
+						Details: []RequestDetail{{
+							Timestamp: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC),
+							Tokens:    TokenStats{InputTokens: 100, OutputTokens: 20, CachedTokens: 40, TotalTokens: 120},
+						}},
+					},
+				},
+			},
+		},
+	}
+
+	stats.ReplaceFromSnapshot(snapshot)
+	model := stats.Snapshot().APIs["test-key"].Models["gpt-5.5"]
+	if model.TokenStatsComplete {
+		t.Fatal("TokenStatsComplete = true, want false for partial history")
+	}
+	if model.Tokens.InputTokens != 100 || model.Tokens.OutputTokens != 20 || model.Tokens.CachedTokens != 40 {
+		t.Fatalf("Tokens = %+v, want retained-detail aggregate", model.Tokens)
+	}
+
+	stats.Record(context.Background(), coreusage.Record{
+		APIKey: "test-key",
+		Model:  "gpt-5.5",
+		Detail: coreusage.Detail{InputTokens: 50, OutputTokens: 10, CachedTokens: 20, TotalTokens: 60},
+	})
+	model = stats.Snapshot().APIs["test-key"].Models["gpt-5.5"]
+	if model.Tokens.InputTokens != 150 || model.Tokens.OutputTokens != 30 || model.Tokens.CachedTokens != 60 {
+		t.Fatalf("Tokens after new request = %+v, want retained baseline plus new usage", model.Tokens)
 	}
 }
 

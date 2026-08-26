@@ -27,14 +27,26 @@ func TestEnvelopeRoundTrip(t *testing.T) {
 }
 
 func TestMethodNamesAreStable(t *testing.T) {
+	if SchemaVersion != 3 {
+		t.Fatalf("SchemaVersion = %d, want 3", SchemaVersion)
+	}
+	if SchemaVersionStreamChunkOmitRequestBody != 3 {
+		t.Fatalf("SchemaVersionStreamChunkOmitRequestBody = %d, want 3", SchemaVersionStreamChunkOmitRequestBody)
+	}
 	if MethodPluginRegister != "plugin.register" {
 		t.Fatalf("MethodPluginRegister = %q", MethodPluginRegister)
+	}
+	if MethodPluginQuiesce != "plugin.quiesce" {
+		t.Fatalf("MethodPluginQuiesce = %q", MethodPluginQuiesce)
 	}
 	if MethodRequestInterceptBefore != "request.intercept_before" {
 		t.Fatalf("MethodRequestInterceptBefore = %q", MethodRequestInterceptBefore)
 	}
 	if MethodRequestInterceptAfter != "request.intercept_after" {
 		t.Fatalf("MethodRequestInterceptAfter = %q", MethodRequestInterceptAfter)
+	}
+	if MethodRequestComplete != "request.complete" {
+		t.Fatalf("MethodRequestComplete = %q", MethodRequestComplete)
 	}
 	if MethodResponseInterceptAfter != "response.intercept_after" {
 		t.Fatalf("MethodResponseInterceptAfter = %q", MethodResponseInterceptAfter)

@@ -3,6 +3,7 @@ package claude
 import (
 	"testing"
 
+	internalsignature "github.com/router-for-me/CLIProxyAPI/v7/internal/signature"
 	"github.com/tidwall/gjson"
 )
 
@@ -38,6 +39,26 @@ func TestConvertClaudeRequestToGemini_ToolChoice_SpecificTool(t *testing.T) {
 	allowed := gjson.GetBytes(output, "toolConfig.functionCallingConfig.allowedFunctionNames").Array()
 	if len(allowed) != 1 || allowed[0].String() != "json" {
 		t.Fatalf("Expected allowedFunctionNames ['json'], got %s", gjson.GetBytes(output, "toolConfig.functionCallingConfig.allowedFunctionNames").Raw)
+	}
+}
+
+func TestConvertClaudeRequestToGemini_StringSystemInstruction(t *testing.T) {
+	inputJSON := []byte(`{
+		"model": "gemini-3-flash-preview",
+		"system": "Be concise",
+		"messages": [{"role": "user", "content": "Hello"}]
+	}`)
+
+	output := ConvertClaudeRequestToGemini("gemini-3-flash-preview", inputJSON, false)
+
+	if got := gjson.GetBytes(output, "systemInstruction.parts.0.text").String(); got != "Be concise" {
+		t.Fatalf("Expected systemInstruction text %q, got %q", "Be concise", got)
+	}
+	if gjson.GetBytes(output, "systemInstruction.role").Exists() {
+		t.Fatalf("Expected systemInstruction.role to not exist, got %q", gjson.GetBytes(output, "systemInstruction.role").String())
+	}
+	if gjson.GetBytes(output, "system_instruction").Exists() {
+		t.Fatalf("Legacy system_instruction field should not be emitted: %s", output)
 	}
 }
 
@@ -92,9 +113,9 @@ func TestConvertClaudeRequestToGemini_StripsClaudeCodeAttribution(t *testing.T) 
 
 	output := ConvertClaudeRequestToGemini("gemini-3-flash-preview", inputJSON, false)
 
-	parts := gjson.GetBytes(output, "system_instruction.parts").Array()
+	parts := gjson.GetBytes(output, "systemInstruction.parts").Array()
 	if len(parts) != 2 {
-		t.Fatalf("Expected 2 system parts after attribution strip, got %d: %s", len(parts), gjson.GetBytes(output, "system_instruction.parts").Raw)
+		t.Fatalf("Expected 2 system parts after attribution strip, got %d: %s", len(parts), gjson.GetBytes(output, "systemInstruction.parts").Raw)
 	}
 	if got := parts[0].Get("text").String(); got != "You are a Claude agent, built on Anthropic's Claude Agent SDK." {
 		t.Fatalf("Unexpected first system part: %q", got)
@@ -102,8 +123,8 @@ func TestConvertClaudeRequestToGemini_StripsClaudeCodeAttribution(t *testing.T) 
 	if got := parts[1].Get("text").String(); got != "User system prompt" {
 		t.Fatalf("Unexpected second system part: %q", got)
 	}
-	if gjson.GetBytes(output, `system_instruction.parts.#(text%"x-anthropic-billing-header:*")`).Exists() {
-		t.Fatalf("Claude Code attribution block was forwarded: %s", gjson.GetBytes(output, "system_instruction.parts").Raw)
+	if gjson.GetBytes(output, `systemInstruction.parts.#(text%"x-anthropic-billing-header:*")`).Exists() {
+		t.Fatalf("Claude Code attribution block was forwarded: %s", gjson.GetBytes(output, "systemInstruction.parts").Raw)
 	}
 }
 
@@ -144,9 +165,9 @@ func TestConvertClaudeRequestToGemini_ConvertsMessageSystemRoleToUserContent(t *
 		t.Fatalf("Unexpected array message-level system content text: %q", got)
 	}
 
-	parts := gjson.GetBytes(output, "system_instruction.parts").Array()
+	parts := gjson.GetBytes(output, "systemInstruction.parts").Array()
 	if len(parts) != 1 {
-		t.Fatalf("Expected only top-level system parts, got %d: %s", len(parts), gjson.GetBytes(output, "system_instruction.parts").Raw)
+		t.Fatalf("Expected only top-level system parts, got %d: %s", len(parts), gjson.GetBytes(output, "systemInstruction.parts").Raw)
 	}
 	if got := parts[0].Get("text").String(); got != "Top-level rules" {
 		t.Fatalf("Unexpected first system part: %q", got)
@@ -222,6 +243,53 @@ func TestConvertClaudeRequestToGemini_StructuredToolResult(t *testing.T) {
 	}
 	if got := img.Get("data").String(); got != "aGVsbG8=" {
 		t.Fatalf("expected image data 'aGVsbG8=', got '%s'", got)
+	}
+}
+
+func TestConvertClaudeRequestToGemini_AlignsPermutedParallelToolResultsWithMixedText(t *testing.T) {
+	inputJSON := []byte(`{
+		"model":"gemini-3.7-flash-high",
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"call_1","name":"Read","input":{"file_path":"/tmp/1"}},
+				{"type":"tool_use","id":"call_2","name":"Read","input":{"file_path":"/tmp/2"}},
+				{"type":"tool_use","id":"call_3","name":"Read","input":{"file_path":"/tmp/3"}}
+			]},
+			{"role":"user","content":[
+				{"type":"text","text":"Results arrived."},
+				{"type":"tool_result","tool_use_id":"call_3","content":"three"},
+				{"type":"tool_result","tool_use_id":"call_1","content":"one"},
+				{"type":"tool_result","tool_use_id":"call_2","content":"two"},
+				{"type":"text","text":"Continue."}
+			]}
+		]
+	}`)
+
+	output := ConvertClaudeRequestToGemini("gemini-3.7-flash-high", inputJSON, false)
+	callParts := gjson.GetBytes(output, "contents.0.parts").Array()
+	responseParts := gjson.GetBytes(output, "contents.1.parts").Array()
+	if len(callParts) != 3 || len(responseParts) != 5 {
+		t.Fatalf("translated parts = %d calls and %d response-turn parts; output=%s", len(callParts), len(responseParts), output)
+	}
+	for index, wantID := range []string{"call_1", "call_2", "call_3"} {
+		if gotID := callParts[index].Get("functionCall.id").String(); gotID != wantID {
+			t.Fatalf("functionCall[%d].id = %q, want %q; output=%s", index, gotID, wantID, output)
+		}
+		if gotID := responseParts[index].Get("functionResponse.id").String(); gotID != wantID {
+			t.Fatalf("functionResponse[%d].id = %q, want %q; output=%s", index, gotID, wantID, output)
+		}
+		if gotName := responseParts[index].Get("functionResponse.name").String(); gotName != "Read" {
+			t.Fatalf("functionResponse[%d].name = %q, want Read; output=%s", index, gotName, output)
+		}
+	}
+	if got := responseParts[3].Get("text").String(); got != "Results arrived." {
+		t.Fatalf("first trailing text = %q; output=%s", got, output)
+	}
+	if got := responseParts[4].Get("text").String(); got != "Continue." {
+		t.Fatalf("second trailing text = %q; output=%s", got, output)
+	}
+	if errPairing := internalsignature.ValidateGeminiFunctionCallPairing(output); errPairing != nil {
+		t.Fatalf("translated parallel tool history is invalid: %v; output=%s", errPairing, output)
 	}
 }
 

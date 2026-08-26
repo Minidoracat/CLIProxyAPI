@@ -13,6 +13,34 @@ import (
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
 )
 
+func TestResolveAntigravityRequestBaseURL(t *testing.T) {
+	t.Run("default uses daily endpoint", func(t *testing.T) {
+		if got := resolveAntigravityRequestBaseURL(&cliproxyauth.Auth{}); got != antigravityBaseURLDaily {
+			t.Fatalf("base URL = %q, want %q", got, antigravityBaseURLDaily)
+		}
+	})
+
+	t.Run("custom attribute endpoint remains supported", func(t *testing.T) {
+		auth := &cliproxyauth.Auth{Attributes: map[string]string{"base_url": "https://enterprise.example.com/"}}
+		if got := resolveAntigravityRequestBaseURL(auth); got != "https://enterprise.example.com" {
+			t.Fatalf("base URL = %q, want custom endpoint", got)
+		}
+	})
+
+	t.Run("custom auth file endpoint remains supported", func(t *testing.T) {
+		auth := &cliproxyauth.Auth{Metadata: map[string]any{"base_url": "https://enterprise.example.com/"}}
+		if got := resolveAntigravityRequestBaseURL(auth); got != "https://enterprise.example.com" {
+			t.Fatalf("base URL = %q, want custom auth file endpoint", got)
+		}
+	})
+}
+
+func TestAntigravityLoadCodeAssistBaseURLRemainsProdByDefault(t *testing.T) {
+	if got := antigravityLoadCodeAssistBaseURL(&cliproxyauth.Auth{}); got != antigravityBaseURLProd {
+		t.Fatalf("loadCodeAssist base URL = %q, want %q", got, antigravityBaseURLProd)
+	}
+}
+
 func TestAntigravityBuildRequest_SanitizesGeminiToolSchema(t *testing.T) {
 	body := buildRequestBodyFromPayload(t, "gemini-2.5-pro")
 
@@ -127,6 +155,40 @@ func TestAntigravityBuildRequest_UsesRouteModelWhenPayloadContainsDifferentModel
 
 	if got, ok := body["model"].(string); !ok || got != "gemini-3-flash-agent" {
 		t.Fatalf("request model should stay on route model, got=%v", body["model"])
+	}
+}
+
+func TestAntigravityBuildRequestUsesDerivedSessionIDAndPreservesExplicit(t *testing.T) {
+	t.Parallel()
+
+	executor := &AntigravityExecutor{}
+	auth := &cliproxyauth.Auth{Metadata: map[string]any{"project_id": "project-1"}}
+	payload := []byte(`{"request":{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}}`)
+	req, err := executor.buildRequest(context.Background(), auth, "token", "gemini-3.1-pro", payload, false, "", "https://example.com", "-123456789")
+	if err != nil {
+		t.Fatalf("buildRequest error: %v", err)
+	}
+	body := requestBody(t, req)
+	request, ok := body["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("request missing or invalid: %v", body["request"])
+	}
+	if got := request["sessionId"]; got != "-123456789" {
+		t.Fatalf("request.sessionId = %v, want -123456789", got)
+	}
+
+	explicitPayload := []byte(`{"request":{"sessionId":"-987654321","contents":[{"role":"user","parts":[{"text":"hello"}]}]}}`)
+	explicitReq, errExplicit := executor.buildRequest(context.Background(), auth, "token", "gemini-3.1-pro", explicitPayload, false, "", "https://example.com", "-123456789")
+	if errExplicit != nil {
+		t.Fatalf("buildRequest explicit error: %v", errExplicit)
+	}
+	explicitBody := requestBody(t, explicitReq)
+	explicitRequest, ok := explicitBody["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("explicit request missing or invalid: %v", explicitBody["request"])
+	}
+	if got := explicitRequest["sessionId"]; got != "-987654321" {
+		t.Fatalf("explicit request.sessionId = %v, want -987654321", got)
 	}
 }
 

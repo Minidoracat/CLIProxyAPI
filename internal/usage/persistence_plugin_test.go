@@ -12,16 +12,23 @@ import (
 
 // mockUsageStore implements usageStore for testing without a real PG connection.
 type mockUsageStore struct {
-	mu             sync.Mutex
-	insertCount    int64
-	insertedRows   []pgDetail
-	snapshotCount  int64
-	lastSnapshot   StatisticsSnapshot
-	lastSnapshotID int64
-	deletedCount   int64
-	closed         atomic.Bool
-	deltaDetails   []pgDetail
-	deltaMaxID     int64
+	mu                   sync.Mutex
+	insertCount          int64
+	insertedRows         []pgDetail
+	snapshotCount        int64
+	lastSnapshot         StatisticsSnapshot
+	lastSnapshotID       int64
+	deletedCount         int64
+	closed               atomic.Bool
+	deltaDetails         []pgDetail
+	deltaMaxID           int64
+	modelTokenAggregates []modelTokenAggregate
+}
+
+func (m *mockUsageStore) LoadModelTokenAggregates(_ context.Context, _ int64) ([]modelTokenAggregate, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]modelTokenAggregate(nil), m.modelTokenAggregates...), nil
 }
 
 func (m *mockUsageStore) InsertDetails(_ context.Context, details []pgDetail) error {

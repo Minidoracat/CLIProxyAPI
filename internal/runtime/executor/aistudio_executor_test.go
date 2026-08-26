@@ -17,7 +17,39 @@ import (
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/tidwall/gjson"
 )
+
+func TestAIStudioTranslateRequestPreservesSummaryFromOriginalRequest(t *testing.T) {
+	executor := NewAIStudioExecutor(&config.Config{}, "aistudio", nil)
+	req := cliproxyexecutor.Request{
+		Model:   "gemini-3.6-flash",
+		Payload: []byte(`{"model":"gemini-3.6-flash","input":"hi"}`),
+	}
+	opts := cliproxyexecutor.Options{
+		SourceFormat:    sdktranslator.FormatOpenAIResponse,
+		OriginalRequest: []byte(`{"model":"gemini-3.6-flash","reasoning":{"summary":"auto"},"input":"hi"}`),
+	}
+	payload, _, err := executor.translateRequest(context.Background(), req, opts, false)
+	if err != nil {
+		t.Fatalf("translateRequest() error = %v", err)
+	}
+	if !gjson.GetBytes(payload, "generationConfig.thinkingConfig.includeThoughts").Bool() {
+		t.Fatalf("original request summary intent was lost: %s", payload)
+	}
+}
+
+func TestAIStudioTranslateRequestPrependsLeadingUserForIssue4959ResponsesHistory(t *testing.T) {
+	executor := NewAIStudioExecutor(&config.Config{}, "aistudio", nil)
+	_, body, err := executor.translateRequest(context.Background(), cliproxyexecutor.Request{
+		Model:   "gemini-3.7-flash-high",
+		Payload: issue4959ResponsesModelFirstPayload(),
+	}, cliproxyexecutor.Options{SourceFormat: sdktranslator.FormatOpenAIResponse}, false)
+	if err != nil {
+		t.Fatalf("translateRequest() error = %v", err)
+	}
+	assertIssue4959LeadingUserContents(t, gjson.GetBytes(body.payload, "contents").Array())
+}
 
 func TestAIStudioExecutorExecuteStartsTTFTBeforeRelayWait(t *testing.T) {
 	const authID = "aistudio-ttft-auth"

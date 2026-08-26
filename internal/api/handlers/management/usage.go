@@ -150,15 +150,12 @@ func enrichSnapshotWithCosts(snapshot *usage.StatisticsSnapshot, prices map[stri
 			var modelTotal float64
 			for i := range modelSnap.Details {
 				d := &modelSnap.Details[i]
-				promptTokens := d.Tokens.InputTokens - d.Tokens.CachedTokens
-				if promptTokens < 0 {
-					promptTokens = 0
-				}
-				cost := float64(promptTokens)/1_000_000*price.Prompt +
-					float64(d.Tokens.CachedTokens)/1_000_000*price.Cache +
-					float64(d.Tokens.OutputTokens)/1_000_000*price.Completion
+				cost := tokenCost(modelName, d.Tokens, price)
 				d.Cost = cost
 				modelTotal += cost
+			}
+			if modelSnap.TokenStatsComplete || hasTokenStats(modelSnap.Tokens) {
+				modelTotal = tokenCost(modelName, modelSnap.Tokens, price)
 			}
 			modelSnap.TotalCost = modelTotal
 			apiSnap.Models[modelName] = modelSnap
@@ -169,4 +166,25 @@ func enrichSnapshotWithCosts(snapshot *usage.StatisticsSnapshot, prices map[stri
 		grandTotal += apiTotal
 	}
 	snapshot.TotalCost = grandTotal
+}
+
+func tokenCost(model string, tokens usage.TokenStats, price config.ModelPrice) float64 {
+	promptTokens := tokens.InputTokens
+	if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-") {
+		promptTokens -= tokens.CachedTokens
+		if promptTokens < 0 {
+			promptTokens = 0
+		}
+	}
+	return float64(promptTokens)/1_000_000*price.Prompt +
+		float64(tokens.CachedTokens)/1_000_000*price.Cache +
+		float64(tokens.OutputTokens)/1_000_000*price.Completion
+}
+
+func hasTokenStats(tokens usage.TokenStats) bool {
+	return tokens.InputTokens != 0 ||
+		tokens.OutputTokens != 0 ||
+		tokens.ReasoningTokens != 0 ||
+		tokens.CachedTokens != 0 ||
+		tokens.TotalTokens != 0
 }

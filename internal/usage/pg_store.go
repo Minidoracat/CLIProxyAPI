@@ -38,6 +38,13 @@ type pgDetail struct {
 	TotalTokens     int64
 }
 
+type modelTokenAggregate struct {
+	StatsKey      string
+	Model         string
+	TotalRequests int64
+	Tokens        TokenStats
+}
+
 // PGStore handles all PostgreSQL operations for usage persistence.
 // It implements the usageStore interface defined in persistence_plugin.go.
 type PGStore struct {
@@ -216,6 +223,56 @@ func (s *PGStore) LoadDetailsSince(ctx context.Context, afterID int64, limit int
 		return nil, 0, fmt.Errorf("usage pg store: iterate detail rows: %w", err)
 	}
 	return details, maxID, nil
+}
+
+// LoadModelTokenAggregates returns token breakdowns for persisted details up to
+// the supplied snapshot marker. Callers must verify the row count and total
+// tokens before treating an aggregate as a complete historical reconstruction.
+func (s *PGStore) LoadModelTokenAggregates(ctx context.Context, throughID int64) ([]modelTokenAggregate, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("usage pg store: not initialized")
+	}
+	if throughID <= 0 {
+		return nil, nil
+	}
+	query := fmt.Sprintf(`
+		SELECT stats_key, model, COUNT(*),
+			COALESCE(SUM(input_tokens), 0),
+			COALESCE(SUM(output_tokens), 0),
+			COALESCE(SUM(reasoning_tokens), 0),
+			COALESCE(SUM(cached_tokens), 0),
+			COALESCE(SUM(total_tokens), 0)
+		FROM %s
+		WHERE id <= $1
+		GROUP BY stats_key, model
+	`, s.detailsTable)
+	rows, err := s.db.QueryContext(ctx, query, throughID)
+	if err != nil {
+		return nil, fmt.Errorf("usage pg store: load model token aggregates: %w", err)
+	}
+	defer rows.Close()
+
+	aggregates := make([]modelTokenAggregate, 0)
+	for rows.Next() {
+		var aggregate modelTokenAggregate
+		if err := rows.Scan(
+			&aggregate.StatsKey,
+			&aggregate.Model,
+			&aggregate.TotalRequests,
+			&aggregate.Tokens.InputTokens,
+			&aggregate.Tokens.OutputTokens,
+			&aggregate.Tokens.ReasoningTokens,
+			&aggregate.Tokens.CachedTokens,
+			&aggregate.Tokens.TotalTokens,
+		); err != nil {
+			return nil, fmt.Errorf("usage pg store: scan model token aggregate: %w", err)
+		}
+		aggregates = append(aggregates, aggregate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("usage pg store: iterate model token aggregates: %w", err)
+	}
+	return aggregates, nil
 }
 
 // DeleteOlderThan removes detail rows older than the given duration.

@@ -86,9 +86,11 @@ type apiStats struct {
 
 // modelStats holds aggregated metrics for a specific model within an API.
 type modelStats struct {
-	TotalRequests int64
-	TotalTokens   int64
-	Details       []RequestDetail
+	TotalRequests      int64
+	TotalTokens        int64
+	Tokens             TokenStats
+	TokenStatsComplete bool
+	Details            []RequestDetail
 }
 
 // RequestDetail stores the timestamp, latency, and token usage for a single request.
@@ -137,10 +139,12 @@ type APISnapshot struct {
 
 // ModelSnapshot summarises metrics for a specific model.
 type ModelSnapshot struct {
-	TotalRequests int64           `json:"total_requests"`
-	TotalTokens   int64           `json:"total_tokens"`
-	TotalCost     float64         `json:"total_cost"`
-	Details       []RequestDetail `json:"details"`
+	TotalRequests      int64           `json:"total_requests"`
+	TotalTokens        int64           `json:"total_tokens"`
+	TotalCost          float64         `json:"total_cost"`
+	Tokens             TokenStats      `json:"tokens"`
+	TokenStatsComplete bool            `json:"token_stats_complete"`
+	Details            []RequestDetail `json:"details"`
 }
 
 var defaultRequestStatistics = NewRequestStatistics()
@@ -225,11 +229,12 @@ func (s *RequestStatistics) updateAPIStats(stats *apiStats, model string, detail
 	stats.TotalTokens += detail.Tokens.TotalTokens
 	modelStatsValue, ok := stats.Models[model]
 	if !ok {
-		modelStatsValue = &modelStats{}
+		modelStatsValue = &modelStats{TokenStatsComplete: true}
 		stats.Models[model] = modelStatsValue
 	}
 	modelStatsValue.TotalRequests++
 	modelStatsValue.TotalTokens += detail.Tokens.TotalTokens
+	modelStatsValue.Tokens = addTokenStats(modelStatsValue.Tokens, detail.Tokens)
 	modelStatsValue.Details = append(modelStatsValue.Details, detail)
 	// Evict oldest entries when cap is exceeded
 	if len(modelStatsValue.Details) > DefaultMaxDetailsPerModel {
@@ -265,9 +270,11 @@ func (s *RequestStatistics) Snapshot() StatisticsSnapshot {
 			requestDetails := make([]RequestDetail, len(modelStatsValue.Details))
 			copy(requestDetails, modelStatsValue.Details)
 			apiSnapshot.Models[modelName] = ModelSnapshot{
-				TotalRequests: modelStatsValue.TotalRequests,
-				TotalTokens:   modelStatsValue.TotalTokens,
-				Details:       requestDetails,
+				TotalRequests:      modelStatsValue.TotalRequests,
+				TotalTokens:        modelStatsValue.TotalTokens,
+				Tokens:             modelStatsValue.Tokens,
+				TokenStatsComplete: modelStatsValue.TokenStatsComplete,
+				Details:            requestDetails,
 			}
 		}
 		result.APIs[apiName] = apiSnapshot
@@ -401,10 +408,21 @@ func (s *RequestStatistics) ReplaceFromSnapshot(snapshot StatisticsSnapshot) {
 		for modelName, modelSnap := range apiSnap.Models {
 			details := make([]RequestDetail, len(modelSnap.Details))
 			copy(details, modelSnap.Details)
+			tokens := normaliseTokenStats(modelSnap.Tokens)
+			if tokenStatsEmpty(tokens) && len(details) > 0 {
+				tokens = aggregateDetailTokens(details)
+			}
+			tokenStatsComplete := modelSnap.TokenStatsComplete && tokens.TotalTokens == modelSnap.TotalTokens
+			if !tokenStatsComplete && int64(len(details)) == modelSnap.TotalRequests {
+				tokens = aggregateDetailTokens(details)
+				tokenStatsComplete = tokens.TotalTokens == modelSnap.TotalTokens
+			}
 			stats.Models[modelName] = &modelStats{
-				TotalRequests: modelSnap.TotalRequests,
-				TotalTokens:   modelSnap.TotalTokens,
-				Details:       details,
+				TotalRequests:      modelSnap.TotalRequests,
+				TotalTokens:        modelSnap.TotalTokens,
+				Tokens:             tokens,
+				TokenStatsComplete: tokenStatsComplete,
+				Details:            details,
 			}
 		}
 		s.apis[apiName] = stats
@@ -568,6 +586,31 @@ func normaliseTokenStats(tokens TokenStats) TokenStats {
 		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens + tokens.CachedTokens
 	}
 	return tokens
+}
+
+func addTokenStats(total, delta TokenStats) TokenStats {
+	total.InputTokens += delta.InputTokens
+	total.OutputTokens += delta.OutputTokens
+	total.ReasoningTokens += delta.ReasoningTokens
+	total.CachedTokens += delta.CachedTokens
+	total.TotalTokens += delta.TotalTokens
+	return total
+}
+
+func aggregateDetailTokens(details []RequestDetail) TokenStats {
+	var total TokenStats
+	for i := range details {
+		total = addTokenStats(total, normaliseTokenStats(details[i].Tokens))
+	}
+	return total
+}
+
+func tokenStatsEmpty(tokens TokenStats) bool {
+	return tokens.InputTokens == 0 &&
+		tokens.OutputTokens == 0 &&
+		tokens.ReasoningTokens == 0 &&
+		tokens.CachedTokens == 0 &&
+		tokens.TotalTokens == 0
 }
 
 func normaliseLatency(latency time.Duration) int64 {

@@ -2,12 +2,15 @@ package management
 
 import (
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/redisqueue"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/usage"
 )
 
 func TestGetUsageQueuePopsRequestedRecords(t *testing.T) {
@@ -92,5 +95,89 @@ func requireRecordID(t *testing.T, raw json.RawMessage, want int) {
 	}
 	if payload.ID != want {
 		t.Fatalf("record id = %d, want %d", payload.ID, want)
+	}
+}
+
+func TestEnrichSnapshotWithCostsUsesCompleteAggregateTokens(t *testing.T) {
+	snapshot := usage.StatisticsSnapshot{
+		APIs: map[string]usage.APISnapshot{
+			"test-key": {
+				Models: map[string]usage.ModelSnapshot{
+					"gpt-5.6-sol": {
+						TotalRequests:      250,
+						TotalTokens:        30000,
+						Tokens:             usage.TokenStats{InputTokens: 25000, OutputTokens: 5000, CachedTokens: 10000, TotalTokens: 30000},
+						TokenStatsComplete: true,
+						Details: []usage.RequestDetail{{
+							Tokens: usage.TokenStats{InputTokens: 100, OutputTokens: 20, CachedTokens: 40, TotalTokens: 120},
+						}},
+					},
+				},
+			},
+		},
+	}
+	prices := map[string]config.ModelPrice{
+		"gpt-5.6-sol": {Prompt: 5, Completion: 30, Cache: 0.5},
+	}
+
+	enrichSnapshotWithCosts(&snapshot, prices)
+
+	model := snapshot.APIs["test-key"].Models["gpt-5.6-sol"]
+	want := float64(15000)/1_000_000*5 + float64(10000)/1_000_000*0.5 + float64(5000)/1_000_000*30
+	if math.Abs(model.TotalCost-want) > 1e-12 {
+		t.Fatalf("model TotalCost = %.12f, want %.12f", model.TotalCost, want)
+	}
+	if math.Abs(snapshot.TotalCost-want) > 1e-12 {
+		t.Fatalf("snapshot TotalCost = %.12f, want %.12f", snapshot.TotalCost, want)
+	}
+	if model.Details[0].Cost == 0 {
+		t.Fatal("retained detail cost was not populated")
+	}
+}
+
+func TestEnrichSnapshotWithCostsUsesKnownPartialAggregateTokens(t *testing.T) {
+	snapshot := usage.StatisticsSnapshot{
+		APIs: map[string]usage.APISnapshot{
+			"test-key": {
+				Models: map[string]usage.ModelSnapshot{
+					"gpt-5.5": {
+						TotalRequests: 3,
+						TotalTokens:   360,
+						Tokens:        usage.TokenStats{InputTokens: 200, OutputTokens: 40, CachedTokens: 80, TotalTokens: 240},
+						Details: []usage.RequestDetail{{
+							Tokens: usage.TokenStats{InputTokens: 100, OutputTokens: 20, CachedTokens: 40, TotalTokens: 120},
+						}},
+					},
+				},
+			},
+		},
+	}
+	prices := map[string]config.ModelPrice{
+		"gpt-5.5": {Prompt: 5, Completion: 30, Cache: 0.5},
+	}
+
+	enrichSnapshotWithCosts(&snapshot, prices)
+
+	model := snapshot.APIs["test-key"].Models["gpt-5.5"]
+	want := tokenCost("gpt-5.5", model.Tokens, prices["gpt-5.5"])
+	if math.Abs(model.TotalCost-want) > 1e-12 {
+		t.Fatalf("model TotalCost = %.12f, want known aggregate %.12f", model.TotalCost, want)
+	}
+	if model.TotalCost <= model.Details[0].Cost {
+		t.Fatalf("model TotalCost = %.12f, want more than retained detail %.12f", model.TotalCost, model.Details[0].Cost)
+	}
+}
+
+func TestTokenCostTreatsClaudeInputAsUncached(t *testing.T) {
+	tokens := usage.TokenStats{
+		InputTokens:  10,
+		OutputTokens: 20,
+		CachedTokens: 100,
+	}
+	price := config.ModelPrice{Prompt: 3, Completion: 15, Cache: 0.3}
+
+	want := float64(10)/1_000_000*3 + float64(100)/1_000_000*0.3 + float64(20)/1_000_000*15
+	if got := tokenCost("claude-sonnet-4-6", tokens, price); math.Abs(got-want) > 1e-12 {
+		t.Fatalf("tokenCost() = %.12f, want %.12f", got, want)
 	}
 }

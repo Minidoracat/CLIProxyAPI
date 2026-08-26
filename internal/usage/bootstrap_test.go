@@ -118,6 +118,56 @@ func TestBootstrapReplaysDeltaAfterSnapshot(t *testing.T) {
 	}
 }
 
+func TestBootstrapBackfillsCompleteModelTokenAggregates(t *testing.T) {
+	mock := &mockUsageStore{
+		lastSnapshot: StatisticsSnapshot{
+			TotalRequests: 3,
+			TotalTokens:   360,
+			APIs: map[string]APISnapshot{
+				"test-key": {
+					TotalRequests: 3,
+					TotalTokens:   360,
+					Models: map[string]ModelSnapshot{
+						"gpt-5.6-sol": {
+							TotalRequests: 3,
+							TotalTokens:   360,
+							Details: []RequestDetail{{
+								Timestamp: time.Date(2026, 7, 14, 12, 0, 0, 0, time.UTC),
+								Tokens:    TokenStats{InputTokens: 100, OutputTokens: 20, CachedTokens: 40, TotalTokens: 120},
+							}},
+						},
+					},
+				},
+			},
+		},
+		lastSnapshotID: 3,
+		modelTokenAggregates: []modelTokenAggregate{{
+			StatsKey:      "test-key",
+			Model:         "gpt-5.6-sol",
+			TotalRequests: 3,
+			Tokens: TokenStats{
+				InputTokens:  300,
+				OutputTokens: 60,
+				CachedTokens: 120,
+				TotalTokens:  360,
+			},
+		}},
+	}
+
+	stats := NewRequestStatistics()
+	if err := BootstrapFromPG(mock, stats); err != nil {
+		t.Fatalf("BootstrapFromPG: %v", err)
+	}
+
+	model := stats.Snapshot().APIs["test-key"].Models["gpt-5.6-sol"]
+	if !model.TokenStatsComplete {
+		t.Fatal("TokenStatsComplete = false, want true")
+	}
+	if model.Tokens.InputTokens != 300 || model.Tokens.CachedTokens != 120 || model.Tokens.OutputTokens != 60 {
+		t.Fatalf("Tokens = %+v, want complete aggregate", model.Tokens)
+	}
+}
+
 func TestDetailsToSnapshot(t *testing.T) {
 	details := []pgDetail{
 		{
