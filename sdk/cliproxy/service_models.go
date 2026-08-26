@@ -940,9 +940,10 @@ func oauthModelAliasesForAuth(cfg *config.Config, channel string, attributes map
 
 func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*ModelInfo) []*ModelInfo {
 	type aliasEntry struct {
-		alias       string
-		displayName string
-		fork        bool
+		alias            string
+		displayName      string
+		fork             bool
+		maxContextLength int
 	}
 
 	forward := make(map[string][]aliasEntry, len(aliases))
@@ -952,14 +953,15 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 		if name == "" || alias == "" {
 			continue
 		}
-		if strings.EqualFold(name, alias) {
+		if strings.EqualFold(name, alias) && aliases[i].MaxContextLength <= 0 {
 			continue
 		}
 		key := strings.ToLower(name)
 		forward[key] = append(forward[key], aliasEntry{
-			alias:       alias,
-			displayName: strings.TrimSpace(aliases[i].DisplayName),
-			fork:        aliases[i].Fork,
+			alias:            alias,
+			displayName:      strings.TrimSpace(aliases[i].DisplayName),
+			fork:             aliases[i].Fork,
+			maxContextLength: aliases[i].MaxContextLength,
 		})
 	}
 	if len(forward) == 0 {
@@ -1008,6 +1010,17 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 				continue
 			}
 			if strings.EqualFold(mappedID, id) {
+				if entry.maxContextLength > 0 {
+					if _, exists := seen[key]; exists {
+						continue
+					}
+					seen[key] = struct{}{}
+					clone := *model
+					clone.ContextLength = entry.maxContextLength
+					clone.MaxContextLength = entry.maxContextLength
+					out = append(out, &clone)
+					addedAlias = true
+				}
 				continue
 			}
 			aliasKey := strings.ToLower(mappedID)
@@ -1022,6 +1035,10 @@ func applyOAuthModelAliasEntries(aliases []config.OAuthModelAlias, models []*Mod
 			}
 			if clone.Name != "" {
 				clone.Name = rewriteModelInfoName(clone.Name, id, mappedID)
+			}
+			if entry.maxContextLength > 0 {
+				clone.ContextLength = entry.maxContextLength
+				clone.MaxContextLength = entry.maxContextLength
 			}
 			out = append(out, &clone)
 			addedAlias = true

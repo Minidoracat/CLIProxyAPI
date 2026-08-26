@@ -185,3 +185,29 @@ func TestApplyOAuthModelAlias_PerAuthAlias(t *testing.T) {
 		t.Fatalf("expected per-auth display name %q, got %q", "Configured GPT Five", out[0].DisplayName)
 	}
 }
+
+func TestApplyOAuthModelAlias_SameNameMaxContextLength(t *testing.T) {
+	const want = 1000000
+	cfg := &config.Config{
+		OAuthModelAlias: map[string][]config.OAuthModelAlias{
+			"codex": {
+				{Name: "gpt-5.6-sol", Alias: "gpt-5.6-sol", MaxContextLength: want},
+			},
+		},
+	}
+	models := []*ModelInfo{
+		{ID: "gpt-5.6-sol", ContextLength: 372000},
+		{ID: "gpt-5.6-terra", ContextLength: 372000},
+	}
+
+	out := applyOAuthModelAlias(cfg, "codex", "oauth", models)
+	if len(out) != 2 {
+		t.Fatalf("expected 2 models, got %d", len(out))
+	}
+	if out[0].ID != "gpt-5.6-sol" || out[0].ContextLength != want || out[0].MaxContextLength != want {
+		t.Fatalf("sol context = id=%q ctx=%d max=%d, want %d", out[0].ID, out[0].ContextLength, out[0].MaxContextLength, want)
+	}
+	if out[1].ID != "gpt-5.6-terra" || out[1].ContextLength != 372000 || out[1].MaxContextLength != 0 {
+		t.Fatalf("terra should stay unchanged, got id=%q ctx=%d max=%d", out[1].ID, out[1].ContextLength, out[1].MaxContextLength)
+	}
+}
