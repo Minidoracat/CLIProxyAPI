@@ -17,6 +17,19 @@ import (
 	"github.com/tidwall/gjson"
 )
 
+func TestClaudeStreamUsagePublishErr(t *testing.T) {
+	t.Parallel()
+	if err := claudeStreamUsagePublishErr(true, nil); err != nil {
+		t.Fatalf("complete stream: %v", err)
+	}
+	if err := claudeStreamUsagePublishErr(false, nil); err != io.ErrUnexpectedEOF {
+		t.Fatalf("incomplete stream = %v, want ErrUnexpectedEOF", err)
+	}
+	scanErr := io.EOF
+	if err := claudeStreamUsagePublishErr(false, scanErr); err != scanErr {
+		t.Fatalf("scan err = %v, want original scan error", err)
+	}
+}
 func TestInjectClaudeDiagnosticsMatchesNativeFieldOrderAndContinuity(t *testing.T) {
 	t.Parallel()
 

@@ -354,7 +354,11 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				}
 				return
 			}
-			acc.Publish(ctx, reporter)
+			if errPub := claudeStreamUsagePublishErr(upstreamCompleted, nil); errPub != nil {
+				acc.PublishFailure(ctx, reporter, errPub)
+			} else {
+				acc.Publish(ctx, reporter)
+			}
 			if upstreamCompleted {
 				commitClaudeDiagnostics(diagnosticsState, upstreamMessageID)
 			}
@@ -415,7 +419,11 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 			}
 			return
 		}
-		acc.Publish(ctx, reporter)
+		if errPub := claudeStreamUsagePublishErr(upstreamCompleted, nil); errPub != nil {
+			acc.PublishFailure(ctx, reporter, errPub)
+		} else {
+			acc.Publish(ctx, reporter)
+		}
 		if upstreamCompleted {
 			commitClaudeDiagnostics(diagnosticsState, upstreamMessageID)
 		}

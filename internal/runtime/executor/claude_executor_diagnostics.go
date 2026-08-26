@@ -2,6 +2,7 @@ package executor
 
 import (
 	"bytes"
+	"io"
 	"strings"
 
 	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
@@ -97,6 +98,16 @@ func observeClaudeStreamLine(line []byte, messageID *string, completed *bool) {
 	case "message_stop":
 		*completed = true
 	}
+}
+
+func claudeStreamUsagePublishErr(upstreamCompleted bool, scanErr error) error {
+	if scanErr != nil {
+		return scanErr
+	}
+	if !upstreamCompleted {
+		return io.ErrUnexpectedEOF
+	}
+	return nil
 }
 
 func claudeMessageIDFromSSE(data []byte) string {
