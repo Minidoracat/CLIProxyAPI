@@ -784,8 +784,29 @@ func (a *ClaudeStreamUsageAccumulator) ProcessLine(line []byte) {
 // publish emits the accumulated usage with estimated reasoning tokens.
 // Skips publishing if no usage event was observed during the stream.
 func (a *ClaudeStreamUsageAccumulator) Publish(ctx context.Context, reporter *UsageReporter) {
-	if !a.sawUsage {
+	detail, ok := a.finalizedDetail()
+	if !ok {
 		return
+	}
+	reporter.Publish(ctx, detail)
+}
+
+// PublishFailure emits accumulated tokens as a failed request when any usage
+// was seen; otherwise it records a zero-token failure.
+func (a *ClaudeStreamUsageAccumulator) PublishFailure(ctx context.Context, reporter *UsageReporter, errs ...error) {
+	if reporter == nil {
+		return
+	}
+	if detail, ok := a.finalizedDetail(); ok {
+		reporter.PublishFailureWithDetail(ctx, detail, errs...)
+		return
+	}
+	reporter.PublishFailure(ctx, errs...)
+}
+
+func (a *ClaudeStreamUsageAccumulator) finalizedDetail() (usage.Detail, bool) {
+	if a == nil || !a.sawUsage {
+		return usage.Detail{}, false
 	}
 	if a.detail.ReasoningTokens == 0 {
 		a.detail.ReasoningTokens = a.thinkingLen / claudeThinkingTokenFactor
@@ -805,7 +826,7 @@ func (a *ClaudeStreamUsageAccumulator) Publish(ctx context.Context, reporter *Us
 		a.detail.ReasoningTokens,
 		a.detail.TotalTokens,
 	)
-	reporter.Publish(ctx, a.detail)
+	return a.detail, true
 }
 
 func mergeClaudeUsageDetail(dst *usage.Detail, detail usage.Detail) {

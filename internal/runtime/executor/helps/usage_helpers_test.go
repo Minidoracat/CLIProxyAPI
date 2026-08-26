@@ -642,6 +642,19 @@ func TestClaudeStreamAccumulator_NoEvents(t *testing.T) {
 	}
 }
 
+func TestClaudeStreamAccumulator_PublishFailureKeepsSeenUsage(t *testing.T) {
+	var acc ClaudeStreamUsageAccumulator
+	acc.ProcessLine([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":10,"cache_read_input_tokens":50000}}}`))
+	reporter := &UsageReporter{provider: "claude", model: "claude-opus-4-6"}
+	acc.PublishFailure(context.Background(), reporter, errors.New("client canceled"))
+	if acc.detail.InputTokens != 10 || acc.detail.CacheReadTokens != 50000 {
+		t.Fatalf("failure publish dropped usage: %+v", acc.detail)
+	}
+	if acc.detail.TotalTokens == 0 {
+		t.Fatal("failure publish left TotalTokens at 0")
+	}
+}
+
 func TestClaudeStreamAccumulator_CacheCreationFallback(t *testing.T) {
 	var acc ClaudeStreamUsageAccumulator
 	acc.ProcessLine([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":3,"cache_creation_input_tokens":80000}}}`))
