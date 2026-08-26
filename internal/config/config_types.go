@@ -260,12 +260,6 @@ type OAuthModelAlias struct {
 	DisplayName string `yaml:"display-name,omitempty" json:"display-name,omitempty"`
 
 	ForceMapping bool `yaml:"force-mapping,omitempty" json:"force-mapping,omitempty"`
-
-	// MaxContextLength overrides the context window advertised to Codex clients
-	// for this OAuth/file-backed model. Same-name entries (name == alias) are
-	// allowed when this is set, so the original model ID can keep its window
-	// override without renaming.
-	MaxContextLength int `yaml:"max-context-length,omitempty" json:"max-context-length,omitempty"`
 }
 
 // PayloadConfig defines default and override parameter rules applied to provider payloads.

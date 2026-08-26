@@ -757,7 +757,6 @@ nonstream-keepalive-interval: 0
 #   codex:
 #     - name: "gpt-5"
 #       alias: "g5"
-#       max-context-length: 1000000 # optional: advertise this window to Codex clients; name may equal alias
 #   kimi:
 #     - name: "kimi-k2.5"
 #       alias: "k2.5"

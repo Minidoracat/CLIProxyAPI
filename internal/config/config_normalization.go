@@ -79,7 +79,7 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 			if name == "" || alias == "" {
 				continue
 			}
-			if strings.EqualFold(name, alias) && entry.MaxContextLength <= 0 {
+			if strings.EqualFold(name, alias) {
 				continue
 			}
 			aliasKey := strings.ToLower(alias)
@@ -87,17 +87,12 @@ func (cfg *Config) SanitizeOAuthModelAlias() {
 				continue
 			}
 			seenAlias[aliasKey] = struct{}{}
-			maxContextLength := entry.MaxContextLength
-			if maxContextLength < 0 {
-				maxContextLength = 0
-			}
 			clean = append(clean, OAuthModelAlias{
-				Name:             name,
-				Alias:            alias,
-				Fork:             entry.Fork,
-				DisplayName:      strings.TrimSpace(entry.DisplayName),
-				ForceMapping:     entry.ForceMapping,
-				MaxContextLength: maxContextLength,
+				Name:         name,
+				Alias:        alias,
+				Fork:         entry.Fork,
+				DisplayName:  strings.TrimSpace(entry.DisplayName),
+				ForceMapping: entry.ForceMapping,
 			})
 		}
 		if len(clean) > 0 {

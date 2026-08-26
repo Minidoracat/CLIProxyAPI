@@ -26,27 +26,6 @@ func TestSanitizeOAuthModelAlias_PreservesOptionalFields(t *testing.T) {
 	}
 }
 
-func TestSanitizeOAuthModelAlias_KeepsSameNameContextOverride(t *testing.T) {
-	cfg := &Config{
-		OAuthModelAlias: map[string][]OAuthModelAlias{
-			"codex": {
-				{Name: "gpt-5.6-sol", Alias: "gpt-5.6-sol", MaxContextLength: 1000000},
-				{Name: "gpt-5.6-sol", Alias: "gpt-5.6-sol"},
-			},
-		},
-	}
-
-	cfg.SanitizeOAuthModelAlias()
-
-	aliases := cfg.OAuthModelAlias["codex"]
-	if len(aliases) != 1 {
-		t.Fatalf("expected 1 sanitized alias, got %d", len(aliases))
-	}
-	if aliases[0].Name != "gpt-5.6-sol" || aliases[0].Alias != "gpt-5.6-sol" || aliases[0].MaxContextLength != 1000000 {
-		t.Fatalf("unexpected sanitized alias: %+v", aliases[0])
-	}
-}
-
 func TestSanitizeOAuthModelAlias_AllowsMultipleAliasesForSameName(t *testing.T) {
 	cfg := &Config{
 		OAuthModelAlias: map[string][]OAuthModelAlias{
