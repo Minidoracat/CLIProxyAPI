@@ -181,3 +181,20 @@ func TestTokenCostTreatsClaudeInputAsUncached(t *testing.T) {
 		t.Fatalf("tokenCost() = %.12f, want %.12f", got, want)
 	}
 }
+
+func TestSnapshotModelPricesReturnsIndependentCopy(t *testing.T) {
+	h := &Handler{cfg: &config.Config{
+		ModelPrices: map[string]config.ModelPrice{
+			"gpt-5.5": {Prompt: 1, Completion: 2, Cache: 0.1},
+		},
+	}}
+	got := h.snapshotModelPrices()
+	got["gpt-5.5"] = config.ModelPrice{Prompt: 9}
+	delete(got, "gpt-5.5")
+	if _, ok := h.cfg.ModelPrices["gpt-5.5"]; !ok {
+		t.Fatal("mutating snapshot deleted live config map")
+	}
+	if h.cfg.ModelPrices["gpt-5.5"].Prompt != 1 {
+		t.Fatalf("live price prompt = %v, want 1", h.cfg.ModelPrices["gpt-5.5"].Prompt)
+	}
+}

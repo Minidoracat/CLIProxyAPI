@@ -1930,6 +1930,29 @@ func sanitizedOAuthModelAlias(entries map[string][]config.OAuthModelAlias) map[s
 
 // model-prices: map[string]ModelPrice
 
+func cloneModelPrices(src map[string]config.ModelPrice) map[string]config.ModelPrice {
+	if len(src) == 0 {
+		return nil
+	}
+	out := make(map[string]config.ModelPrice, len(src))
+	for model, price := range src {
+		out[model] = price
+	}
+	return out
+}
+
+func (h *Handler) snapshotModelPrices() map[string]config.ModelPrice {
+	if h == nil {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.cfg == nil {
+		return nil
+	}
+	return cloneModelPrices(h.cfg.ModelPrices)
+}
+
 func (h *Handler) GetModelPrices(c *gin.Context) {
 	if h.modelPriceStore != nil {
 		prices, err := h.modelPriceStore.LoadModelPrices(context.Background())
@@ -1942,7 +1965,7 @@ func (h *Handler) GetModelPrices(c *gin.Context) {
 		}
 		log.Warnf("model-prices: PG load failed, falling back to config: %v", err)
 	}
-	prices := h.cfg.ModelPrices
+	prices := h.snapshotModelPrices()
 	if prices == nil {
 		prices = map[string]config.ModelPrice{}
 	}
@@ -1977,8 +2000,10 @@ func (h *Handler) PutModelPrices(c *gin.Context) {
 		}
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.ModelPrices = cfg.ModelPrices
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) PatchModelPrices(c *gin.Context) {
@@ -1998,7 +2023,6 @@ func (h *Handler) PatchModelPrices(c *gin.Context) {
 		return
 	}
 
-	// Load current prices from PG if available, otherwise from config.
 	var current map[string]config.ModelPrice
 	if h.modelPriceStore != nil {
 		loaded, err := h.modelPriceStore.LoadModelPrices(context.Background())
@@ -2009,7 +2033,7 @@ func (h *Handler) PatchModelPrices(c *gin.Context) {
 		}
 	}
 	if current == nil {
-		current = h.cfg.ModelPrices
+		current = h.snapshotModelPrices()
 	}
 	if current == nil {
 		current = make(map[string]config.ModelPrice)
@@ -2031,8 +2055,10 @@ func (h *Handler) PatchModelPrices(c *gin.Context) {
 		}
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	h.cfg.ModelPrices = cfg.ModelPrices
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func (h *Handler) DeleteModelPrices(c *gin.Context) {
@@ -2041,14 +2067,19 @@ func (h *Handler) DeleteModelPrices(c *gin.Context) {
 		c.JSON(400, gin.H{"error": "missing model"})
 		return
 	}
-	if h.cfg.ModelPrices == nil {
+
+	h.mu.Lock()
+	if h.cfg == nil || h.cfg.ModelPrices == nil {
+		h.mu.Unlock()
 		c.JSON(404, gin.H{"error": "model not found"})
 		return
 	}
 	if _, ok := h.cfg.ModelPrices[model]; !ok {
+		h.mu.Unlock()
 		c.JSON(404, gin.H{"error": "model not found"})
 		return
 	}
+	h.mu.Unlock()
 
 	if h.modelPriceStore != nil {
 		if err := h.modelPriceStore.DeleteModelPrice(context.Background(), model); err != nil {
@@ -2058,11 +2089,13 @@ func (h *Handler) DeleteModelPrices(c *gin.Context) {
 		}
 	}
 
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	delete(h.cfg.ModelPrices, model)
 	if len(h.cfg.ModelPrices) == 0 {
 		h.cfg.ModelPrices = nil
 	}
-	h.persist(c)
+	h.persistLocked(c)
 }
 
 func sanitizedOAuthRequestScopedErrors(entries map[string][]config.RequestScopedErrorRule) map[string][]config.RequestScopedErrorRule {

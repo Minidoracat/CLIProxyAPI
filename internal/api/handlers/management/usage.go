@@ -41,7 +41,7 @@ func (h *Handler) GetUsageStatistics(c *gin.Context) {
 		snapshot = h.usageStats.Snapshot()
 	}
 	if h != nil && h.cfg != nil {
-		enrichSnapshotWithCosts(&snapshot, h.cfg.ModelPrices)
+		enrichSnapshotWithCosts(&snapshot, h.snapshotModelPrices())
 	}
 	c.JSON(http.StatusOK, gin.H{
 		"usage":           snapshot,
@@ -56,7 +56,7 @@ func (h *Handler) ExportUsageStatistics(c *gin.Context) {
 		snapshot = h.usageStats.Snapshot()
 	}
 	if h != nil && h.cfg != nil {
-		enrichSnapshotWithCosts(&snapshot, h.cfg.ModelPrices)
+		enrichSnapshotWithCosts(&snapshot, h.snapshotModelPrices())
 	}
 	c.JSON(http.StatusOK, usageExportPayload{
 		Version:    1,
