@@ -333,12 +333,16 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				event.Write(line)
 				event.WriteByte('\n')
 				if len(bytes.TrimSpace(line)) == 0 && !flushEvent() {
-					emitCancellation(ctx.Err())
+					if !emitCancellation(ctx.Err()) {
+						acc.PublishFailure(ctx, reporter, ctx.Err())
+					}
 					return
 				}
 			}
 			if !flushEvent() {
-				emitCancellation(ctx.Err())
+				if !emitCancellation(ctx.Err()) {
+					acc.PublishFailure(ctx, reporter, ctx.Err())
+				}
 				return
 			}
 			if emitCancellation(scanner.Err()) {
@@ -401,7 +405,9 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 				select {
 				case out <- cliproxyexecutor.StreamChunk{Payload: chunks[i]}:
 				case <-ctx.Done():
-					emitCancellation(ctx.Err())
+					if !emitCancellation(ctx.Err()) {
+						acc.PublishFailure(ctx, reporter, ctx.Err())
+					}
 					return
 				}
 			}
