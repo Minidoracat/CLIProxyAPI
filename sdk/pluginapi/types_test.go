@@ -27,6 +27,7 @@ var _ RequestInterceptor = (*compileTimePlugin)(nil)
 var _ RequestLifecyclePlugin = (*compileTimePlugin)(nil)
 var _ ResponseInterceptor = (*compileTimePlugin)(nil)
 var _ StreamChunkInterceptor = (*compileTimePlugin)(nil)
+var _ WebSocketResponseObserver = (*compileTimePlugin)(nil)
 var _ ThinkingApplier = (*compileTimePlugin)(nil)
 var _ UsagePlugin = (*compileTimePlugin)(nil)
 var _ CommandLinePlugin = (*compileTimePlugin)(nil)
@@ -529,6 +530,10 @@ func (compileTimePlugin) InterceptStreamChunk(context.Context, StreamChunkInterc
 	return StreamChunkInterceptResponse{}, nil
 }
 
+func (compileTimePlugin) ObserveWebSocketResponseEvent(context.Context, WebSocketResponseEvent) error {
+	return nil
+}
+
 func (compileTimePlugin) ApplyThinking(context.Context, ThinkingApplyRequest) (PayloadResponse, error) {
 	return PayloadResponse{}, nil
 }
@@ -549,4 +554,54 @@ func (compileTimePlugin) RegisterManagement(context.Context, ManagementRegistrat
 
 func (compileTimePlugin) HandleManagement(context.Context, ManagementRequest) (ManagementResponse, error) {
 	return ManagementResponse{}, nil
+}
+
+func TestHostAffinityLookupTypes(t *testing.T) {
+	if HostAffinityStatusBound != "bound" {
+		t.Fatalf("HostAffinityStatusBound = %q", HostAffinityStatusBound)
+	}
+	if HostAffinityStatusUnbound != "unbound" {
+		t.Fatalf("HostAffinityStatusUnbound = %q", HostAffinityStatusUnbound)
+	}
+	if HostAffinityStatusAmbiguous != "ambiguous" {
+		t.Fatalf("HostAffinityStatusAmbiguous = %q", HostAffinityStatusAmbiguous)
+	}
+	if HostAffinityStatusUnsupported != "unsupported" {
+		t.Fatalf("HostAffinityStatusUnsupported = %q", HostAffinityStatusUnsupported)
+	}
+
+	req := HostAffinityLookupRequest{
+		Provider:  "anthropic",
+		Model:     "claude-3-7-sonnet",
+		SessionID: "sess-1",
+	}
+	data, errMarshal := json.Marshal(req)
+	if errMarshal != nil {
+		t.Fatalf("marshal request: %v", errMarshal)
+	}
+	var decodedReq HostAffinityLookupRequest
+	if errUnmarshal := json.Unmarshal(data, &decodedReq); errUnmarshal != nil {
+		t.Fatalf("unmarshal request: %v", errUnmarshal)
+	}
+	if decodedReq != req {
+		t.Fatalf("decoded request = %#v, want %#v", decodedReq, req)
+	}
+
+	resp := HostAffinityLookupResponse{
+		Status:      HostAffinityStatusBound,
+		AuthIndex:   "idx-1",
+		Disabled:    true,
+		Unavailable: false,
+	}
+	respData, errRespMarshal := json.Marshal(resp)
+	if errRespMarshal != nil {
+		t.Fatalf("marshal response: %v", errRespMarshal)
+	}
+	var decodedResp HostAffinityLookupResponse
+	if errRespUnmarshal := json.Unmarshal(respData, &decodedResp); errRespUnmarshal != nil {
+		t.Fatalf("unmarshal response: %v", errRespUnmarshal)
+	}
+	if decodedResp.Status != resp.Status || decodedResp.AuthIndex != resp.AuthIndex || decodedResp.Disabled != resp.Disabled {
+		t.Fatalf("decoded response = %#v, want %#v", decodedResp, resp)
+	}
 }
