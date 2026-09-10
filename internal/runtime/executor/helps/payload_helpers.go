@@ -140,24 +140,32 @@ func ApplyPayloadConfigWithTrackedPaths(cfg *config.Config, model, protocol, fro
 					if fullPath == "" {
 						continue
 					}
-					if gjson.GetBytes(source, fullPath).Exists() {
-						continue
+					var fileValue string
+					fileLoaded := false
+					for _, resolvedPath := range resolvePayloadRulePaths(out, fullPath) {
+						if gjson.GetBytes(source, resolvedPath).Exists() {
+							continue
+						}
+						if _, ok := appliedDefaults[resolvedPath]; ok {
+							continue
+						}
+						if !fileLoaded {
+							content, ok := payloadFileValue(value)
+							if !ok {
+								break
+							}
+							fileValue = string(content)
+							fileLoaded = true
+						}
+						updated, errSet := sjson.SetBytes(out, resolvedPath, fileValue)
+						if errSet != nil {
+							continue
+						}
+						out = updated
+						logPayloadFileRuleApplied("default-file", model, requestedModel, protocol, resolvedPath, value, len(fileValue))
+						appliedDefaults[resolvedPath] = struct{}{}
+						markTouched(resolvedPath)
 					}
-					if _, ok := appliedDefaults[fullPath]; ok {
-						continue
-					}
-					fileValue, ok := payloadFileValue(value)
-					if !ok {
-						continue
-					}
-					updated, errSet := sjson.SetBytes(out, fullPath, string(fileValue))
-					if errSet != nil {
-						continue
-					}
-					out = updated
-					logPayloadFileRuleApplied("default-file", model, requestedModel, protocol, fullPath, value, len(fileValue))
-					appliedDefaults[fullPath] = struct{}{}
-					markTouched(fullPath)
 				}
 			}
 			// Apply override rules: last write wins per field across all matching rules.
@@ -219,13 +227,16 @@ func ApplyPayloadConfigWithTrackedPaths(cfg *config.Config, model, protocol, fro
 					if !ok {
 						continue
 					}
-					updated, errSet := sjson.SetBytes(out, fullPath, string(fileValue))
-					if errSet != nil {
-						continue
+					text := string(fileValue)
+					for _, resolvedPath := range resolvePayloadRulePaths(out, fullPath) {
+						updated, errSet := sjson.SetBytes(out, resolvedPath, text)
+						if errSet != nil {
+							continue
+						}
+						out = updated
+						logPayloadFileRuleApplied("override-file", model, requestedModel, protocol, resolvedPath, value, len(fileValue))
+						markTouched(resolvedPath)
 					}
-					out = updated
-					logPayloadFileRuleApplied("override-file", model, requestedModel, protocol, fullPath, value, len(fileValue))
-					markTouched(fullPath)
 				}
 			}
 			// Apply filter rules: remove matching paths from payload.
