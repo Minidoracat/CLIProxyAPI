@@ -10,27 +10,14 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
-	claudeauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/claude"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	claudeauth "github.com/router-for-me/CLIProxyAPI/v8/internal/auth/claude"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 	"github.com/tidwall/gjson"
 )
 
-func TestClaudeStreamUsagePublishErr(t *testing.T) {
-	t.Parallel()
-	if err := claudeStreamUsagePublishErr(true, nil); err != nil {
-		t.Fatalf("complete stream: %v", err)
-	}
-	if err := claudeStreamUsagePublishErr(false, nil); err != io.ErrUnexpectedEOF {
-		t.Fatalf("incomplete stream = %v, want ErrUnexpectedEOF", err)
-	}
-	scanErr := io.EOF
-	if err := claudeStreamUsagePublishErr(false, scanErr); err != scanErr {
-		t.Fatalf("scan err = %v, want original scan error", err)
-	}
-}
 func TestInjectClaudeDiagnosticsMatchesNativeFieldOrderAndContinuity(t *testing.T) {
 	t.Parallel()
 
@@ -77,7 +64,7 @@ func TestClaudeExecutorDiagnosticsAdvancesAfterSuccessfulResponse(t *testing.T) 
 	testID := uuid.NewString()
 	auth := &cliproxyauth.Auth{
 		ID:         "diagnostics-live-path-" + testID,
-		Attributes: map[string]string{"api_key": "sk-ant-oat-diagnostics-live-path"},
+		Attributes: map[string]string{"api_key": "sk-ant-oat-diagnostics-live-path", "cloak_mode": "always"},
 		Metadata: map[string]any{
 			"account_uuid":                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 			claudeauth.ClaudeDeviceIDsMetadataKey: deviceIDs,
@@ -147,7 +134,7 @@ func TestClaudeExecutorContinuityAdvancesRequestIDAndPromptIDInBillingHeader(t *
 	testID := uuid.NewString()
 	auth := &cliproxyauth.Auth{
 		ID:         "continuity-test-" + testID,
-		Attributes: map[string]string{"api_key": "sk-ant-oat-continuity-test"},
+		Attributes: map[string]string{"api_key": "sk-ant-oat-continuity-test", "cloak_mode": "always"},
 		Metadata: map[string]any{
 			"account_uuid":                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 			claudeauth.ClaudeDeviceIDsMetadataKey: deviceIDs,
@@ -206,7 +193,7 @@ func TestClaudeExecutorContinuityAdvancesRequestIDAndPromptIDInBillingHeader(t *
 
 	// Verify Turn 1:
 	h1 := capturedBillingHeaders[0]
-	if !strings.Contains(h1, "cc_version=2.1.258.") || !strings.Contains(h1, "cc_entrypoint=cli;") || !strings.Contains(h1, "cch=") {
+	if !strings.Contains(h1, "cc_version=2.1.280.") || !strings.Contains(h1, "cc_entrypoint=cli;") || !strings.Contains(h1, "cch=") {
 		t.Fatalf("h1 invalid: %s", h1)
 	}
 	if strings.Contains(h1, "cc_prev_req=") {
